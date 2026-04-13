@@ -1,8 +1,8 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { useParams, useSearchParams } from 'react-router-dom';
 import axios from 'axios';
-import { 
-  Mic, MicOff, Video, VideoOff, ScreenShare, PhoneOff, 
+import {
+  Mic, MicOff, Video, VideoOff, ScreenShare, PhoneOff,
   Info, Users, MessageSquare, AlertCircle, CheckCircle2,
   Code, Play, Send, ChevronRight, BookOpen, Trophy
 } from 'lucide-react';
@@ -65,12 +65,14 @@ const MeetPage = () => {
   const [warningReason, setWarningReason] = useState('');
   const [currentTime, setCurrentTime] = useState(new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }));
   const [isUploading, setIsUploading] = useState(true);
-  
+  const [isCodingRoundEnabled, setIsCodingRoundEnabled] = useState(true);
+
   // Coding Mode State
   const boilerplates = {
     javascript: '// Write your JavaScript code here\n',
     python: '# Write your Python code here\n',
     java: 'public class Main {\n    public static void main(String[] args) {\n        // Write your Java code here\n    }\n}\n',
+    go: 'package main\n\nimport "fmt"\n\nfunc main() {\n    // Write your Go code here\n    fmt.Println("Hello, World!")\n}\n',
     cpp: '#include <iostream>\nusing namespace std;\n\nint main() {\n    // Write your C++ code here\n    return 0;\n}\n',
     sql: '-- Write your MySQL query here\nSELECT * FROM users;\n',
     mongodb: '// Write your MongoDB query here\ndb.users.find({});\n',
@@ -102,7 +104,7 @@ const MeetPage = () => {
 
   const codingQuestionsRef = useRef(codingQuestions);
   const currentIdxRef = useRef(currentQuestionIdx);
-  
+
   useEffect(() => {
     codingQuestionsRef.current = codingQuestions;
   }, [codingQuestions]);
@@ -135,54 +137,54 @@ const MeetPage = () => {
     const fetchInitialData = async () => {
       // 0. Fetch Coding Question (Prioritize so it's ready)
       console.log("Checking for coding question with token:", effectiveUserId);
-        try {
-          const resCoding = await axios.get(`${EXTERNAL_API_URL}/api/coding/get-question/${effectiveUserId}`);
-          console.log("Coding API Response Raw:", resCoding.data);
+      try {
+        const resCoding = await axios.get(`${EXTERNAL_API_URL}/api/coding/get-question/${effectiveUserId}`);
+        console.log("Coding API Response Raw:", resCoding.data);
 
-          let parsedData = resCoding.data;
-          if (resCoding.data && resCoding.data.data) {
-            parsedData = typeof resCoding.data.data === 'string' ? JSON.parse(resCoding.data.data) : resCoding.data.data;
-          }
-
-          const rawQuestions = parsedData.questions || [];
-          
-          // Deep unescape \n characters that come from double-stringified backend data
-          const unescapeLines = (str) => typeof str === 'string' ? str.replace(/\\n/g, '\n') : str;
-          
-          const fetchedQuestions = rawQuestions.map(q => ({
-            ...q,
-            title: unescapeLines(q.title),
-            problemStatement: unescapeLines(q.problemStatement),
-            starterCode: unescapeLines(q.starterCode),
-            hints: (q.hints || []).map(h => unescapeLines(h)),
-            constraints: (q.constraints || []).map(c => unescapeLines(c)),
-            testCases: (q.testCases || []).map(tc => ({
-              ...tc,
-              input: unescapeLines(tc.input),
-              expectedOutput: unescapeLines(tc.expectedOutput),
-              explanation: unescapeLines(tc.explanation)
-            }))
-          }));
-
-          console.log("Extracted Questions List (Unescaped):", fetchedQuestions);
-
-          if (fetchedQuestions.length > 0) {
-            setCodingQuestions(fetchedQuestions);
-            
-            if (parsedData.totalInterviewTimeMinutes) {
-              setTimeLeft(parsedData.totalInterviewTimeMinutes * 60);
-            }
-
-            const mainQ = fetchedQuestions[0];
-            setCodingTask(mainQ.problemStatement || '');
-            setLanguage(mainQ.language || 'java');
-            setCode(mainQ.starterCode || '');
-          } else {
-            console.warn("No questions found in the API response data.");
-          }
-        } catch (codingErr) {
-          console.error('Failed to fetch dynamic coding question:', codingErr);
+        let parsedData = resCoding.data;
+        if (resCoding.data && resCoding.data.data) {
+          parsedData = typeof resCoding.data.data === 'string' ? JSON.parse(resCoding.data.data) : resCoding.data.data;
         }
+
+        const rawQuestions = parsedData.questions || [];
+
+        // Deep unescape \n characters that come from double-stringified backend data
+        const unescapeLines = (str) => typeof str === 'string' ? str.replace(/\\n/g, '\n') : str;
+
+        const fetchedQuestions = rawQuestions.map(q => ({
+          ...q,
+          title: unescapeLines(q.title),
+          problemStatement: unescapeLines(q.problemStatement),
+          starterCode: unescapeLines(q.starterCode),
+          hints: (q.hints || []).map(h => unescapeLines(h)),
+          constraints: (q.constraints || []).map(c => unescapeLines(c)),
+          testCases: (q.testCases || []).map(tc => ({
+            ...tc,
+            input: unescapeLines(tc.input),
+            expectedOutput: unescapeLines(tc.expectedOutput),
+            explanation: unescapeLines(tc.explanation)
+          }))
+        }));
+
+        console.log("Extracted Questions List (Unescaped):", fetchedQuestions);
+
+        if (fetchedQuestions.length > 0) {
+          setCodingQuestions(fetchedQuestions);
+
+          if (parsedData.totalInterviewTimeMinutes) {
+            setTimeLeft(parsedData.totalInterviewTimeMinutes * 60);
+          }
+
+          const mainQ = fetchedQuestions[0];
+          setCodingTask(mainQ.problemStatement || '');
+          setLanguage(mainQ.language || 'java');
+          setCode(mainQ.starterCode || '');
+        } else {
+          console.warn("No questions found in the API response data.");
+        }
+      } catch (codingErr) {
+        console.error('Failed to fetch dynamic coding question:', codingErr);
+      }
 
       try {
         // 1. Fetch Job Info
@@ -190,7 +192,7 @@ const MeetPage = () => {
         if (resJob.data.status && resJob.data.data?.interviewDto) {
           const { interviewDto } = resJob.data.data;
           setCandidateName(interviewDto.candidateName || 'Candidate');
-          
+
           const jobDto = interviewDto.jobDto || {};
           jobDataRef.current = {
             experience: jobDto.experience || 'N/A',
@@ -281,7 +283,7 @@ const MeetPage = () => {
     const handleFullscreenChange = () => {
       if (!document.fullscreenElement && !showWarning) triggerViolation("Exited full-screen.");
     };
-    
+
     // Updated Proctoring: Allow copy/paste specifically when in coding mode for testing.
     const preventAction = (e) => {
       if (isCodingMode) return; // Permission granted for coding
@@ -294,7 +296,7 @@ const MeetPage = () => {
         e.preventDefault();
         triggerViolation("Attempted to open Developer Tools.");
       }
-      
+
       // Conditional Copy/Paste/Cut
       if (!isCodingMode && e.ctrlKey && (e.key === 'c' || e.key === 'v' || e.key === 'x')) {
         e.preventDefault();
@@ -329,10 +331,10 @@ const MeetPage = () => {
     syncIntervalRef.current = setInterval(() => {
       const transcript = messages.map(m => `[${m.who === 'ai' ? 'Interviewer' : 'Candidate'}]: ${m.text}`).join('\n\n');
       if (transcript.trim()) syncTranscripts(transcript);
-      
+
       const durationMs = Date.now() - startTimeRef.current;
       const durationStr = formatDuration(durationMs);
-      axios.post(`${EXTERNAL_API_URL}/analysis/ai/duration`, { token: effectiveUserId, duration: durationStr }).catch(() => {});
+      axios.post(`${EXTERNAL_API_URL}/analysis/ai/duration`, { token: effectiveUserId, duration: durationStr }).catch(() => { });
     }, 10000);
 
 
@@ -349,7 +351,7 @@ const MeetPage = () => {
 
   const syncTranscripts = async (transcriptText) => {
     // 1. External Transcript API
-    axios.post(`${EXTERNAL_API_URL}/transcript/ai`, { token: effectiveUserId, transcript: transcriptText }).catch(() => {});
+    axios.post(`${EXTERNAL_API_URL}/transcript/ai`, { token: effectiveUserId, transcript: transcriptText }).catch(() => { });
 
     // Analysis
     try {
@@ -366,11 +368,11 @@ const MeetPage = () => {
 
   const triggerViolation = (reason) => {
     if (status !== 'interviewing' || showWarning) return;
-    
+
     setWarningReason(reason);
     setShowWarning(true);
-    
-    axios.post(`${BASE_API_URL}/api/log-violation/${effectiveUserId}`, { reason }).catch(() => {});
+
+    axios.post(`${BASE_API_URL}/api/log-violation/${effectiveUserId}`, { reason }).catch(() => { });
     if (dcRef.current?.readyState === 'open') {
       dcRef.current.send(JSON.stringify({ type: 'response.cancel' }));
     }
@@ -383,12 +385,12 @@ const MeetPage = () => {
       terminateInterview(reason);
     } else {
       setWarningCount(prev => prev + 1);
-      if (document.fullscreenElement) document.exitFullscreen().catch(() => {});
+      if (document.fullscreenElement) document.exitFullscreen().catch(() => { });
     }
   };
 
   const terminateInterview = (reason) => {
-    axios.post(`${EXTERNAL_API_URL}/api/goodmood/terminate/reason`, { reason, token: effectiveUserId }).catch(() => {});
+    axios.post(`${EXTERNAL_API_URL}/api/goodmood/terminate/reason`, { reason, token: effectiveUserId }).catch(() => { });
     alert(`🛑 INTERVIEW TERMINATED\n\n${reason}\n\nYou have exceeded the allowed warnings.`);
     finishInterview();
   };
@@ -409,7 +411,7 @@ const MeetPage = () => {
   };
 
   const requestFullScreen = () => {
-    document.documentElement.requestFullscreen().catch(() => {});
+    document.documentElement.requestFullscreen().catch(() => { });
   };
 
   const startInterview = async () => {
@@ -417,8 +419,40 @@ const MeetPage = () => {
       localStreamRef.current = await navigator.mediaDevices.getUserMedia({ audio: true, video: true });
       if (videoRef.current) videoRef.current.srcObject = localStreamRef.current;
     } catch (err) {
-      alert('Camera and Microphone access are required.'); return;
+      alert(`Camera/Microphone Error: ${err.name} - ${err.message}. Please check if you have a camera/mic connected, and close other apps (Zoom, Teams) that might be using it.`); 
+      return;
     }
+
+    let codingFlag = true;
+    let behavioralFlag = true;
+
+    try {
+      const typeResponse = await axios.get(`${EXTERNAL_API_URL}/api/goodmood/interview/get/token/interview/type?token=${effectiveUserId}`);
+      console.log("Interview Type Response:", typeResponse.data);
+
+      const typeData = typeResponse.data?.data;
+      if (typeData) {
+        codingFlag = typeData.coding === 1;
+        behavioralFlag = typeData.interviewChecking === 1;
+        setIsCodingRoundEnabled(codingFlag);
+      }
+
+    } catch (error) {
+      console.error("Failed to fetch interview type:", error);
+    }
+
+    // const canvas = document.createElement('canvas');
+    // canvas.width = 640; canvas.height = 480;
+    // const fakeVideoTrack = canvas.getContext('2d').canvas.captureStream(30).getVideoTracks()[0];
+
+    // const audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+    // const fakeAudioTrack = audioCtx.createMediaStreamDestination().stream.getAudioTracks()[0];
+
+    // localStreamRef.current = new MediaStream([fakeVideoTrack, fakeAudioTrack]);
+    // if (videoRef.current) {
+    //   videoRef.current.srcObject = localStreamRef.current;
+    // }
+
 
     try {
       screenStreamRef.current = await navigator.mediaDevices.getDisplayMedia({ video: { displaySurface: "monitor" } });
@@ -428,15 +462,25 @@ const MeetPage = () => {
         throw new Error("Must share Entire Screen.");
       }
       track.onended = () => triggerViolation("Screen share stopped.");
+
     } catch (err) {
       alert(err.message); return;
     }
 
     requestFullScreen();
     setStatus('interviewing');
+    setIsCodingMode(true);
     startTimeRef.current = Date.now();
+
+    // logics for interview type as per === 1
+    if (codingFlag && !behavioralFlag) {
+      setIsCodingMode(true);
+    } else {
+      setIsCodingMode(false);
+    }
+
     // Use PUT instead of POST for completion as per app.py
-    axios.put(`${EXTERNAL_API_URL}/api/goodmood/question/complete/${effectiveUserId}`).catch(() => {});
+    axios.put(`${EXTERNAL_API_URL}/api/goodmood/question/complete/${effectiveUserId}`).catch(() => { });
 
 
     // Audio Setup for Recording
@@ -464,7 +508,7 @@ You are interviewing ${candidateName} for the role of ${jobTitle}.
 
 === INTERVIEW FLOW ===
 1. BEHAVIORAL: Ask the following questions first:
-${questionsRef.current.map((q, i) => `${i+1}. ${q}`).join('\n')}
+${questionsRef.current.map((q, i) => `${i + 1}. ${q}`).join('\n')}
 
 2. CODING CHALLENGE: After the behavioral questions, you MUST inform the candidate that there are ${codingQuestions.length} coding tasks available for them to solve.
    
@@ -531,7 +575,7 @@ ${questionsRef.current.map((q, i) => `${i+1}. ${q}`).join('\n')}
 
   const setupWebRTC = async (ephemeralKey) => {
     pcRef.current = new RTCPeerConnection();
-    
+
     pcRef.current.ontrack = (e) => {
       if (audioElRef.current) {
         audioElRef.current.srcObject = e.streams[0];
@@ -562,18 +606,18 @@ ${questionsRef.current.map((q, i) => `${i+1}. ${q}`).join('\n')}
   let userBuffer = '';
   const handleDataChannelMessage = (e) => {
     const evt = JSON.parse(e.data);
-    switch(evt.type) {
-      case 'response.created': 
-        setIsAiTalking(true); 
+    switch (evt.type) {
+      case 'response.created':
+        setIsAiTalking(true);
         break;
-      case 'response.audio_transcript.delta': 
-        aiBuffer += evt.delta || ''; 
-        setIsAiTalking(true); 
+      case 'response.audio_transcript.delta':
+        aiBuffer += evt.delta || '';
+        setIsAiTalking(true);
         break;
       case 'response.audio_transcript.done':
         if (aiBuffer.trim()) {
           addMessage('ai', aiBuffer.trim());
-          
+
           if (aiBuffer.includes('INTERVIEW_COMPLETE')) {
             setTimeout(finishInterview, 2500);
           }
@@ -581,7 +625,7 @@ ${questionsRef.current.map((q, i) => `${i+1}. ${q}`).join('\n')}
           // AI Trigger Detection for Coding
           const lowerText = aiBuffer.toLowerCase();
           if (
-            lowerText.includes('opened the coding editor') || 
+            lowerText.includes('opened the coding editor') ||
             lowerText.includes('coding task') ||
             lowerText.includes('write a function') ||
             lowerText.includes('solve the problems')
@@ -595,14 +639,14 @@ ${questionsRef.current.map((q, i) => `${i+1}. ${q}`).join('\n')}
             setIsCodingMode(true);
           }
         }
-        aiBuffer = ''; 
+        aiBuffer = '';
         break;
-      case 'response.done': 
-      case 'input_audio_buffer.speech_stopped': 
-        setIsAiTalking(false); 
+      case 'response.done':
+      case 'input_audio_buffer.speech_stopped':
+        setIsAiTalking(false);
         break;
       case 'conversation.item.input_audio_transcription.completed':
-        addMessage('user', evt.transcript || ''); 
+        addMessage('user', evt.transcript || '');
         break;
     }
   };
@@ -625,15 +669,15 @@ ${questionsRef.current.map((q, i) => `${i+1}. ${q}`).join('\n')}
   const checkLanguageLock = (q) => {
     if (!q) return false;
     if (q.isLanguageSpecific) return true;
-    
+
     const text = (q.problemStatement || "").toLowerCase();
     const title = (q.title || "").toLowerCase();
     const lang = (q.language || "").toLowerCase();
-    
+
     // Logic: If title contains language name AND (text contains "only" or "must")
     const lockPhrases = ["only solve in", "must use", "specifically in", "only in", "required to use", "use only"];
     const hasLockPhrase = lockPhrases.some(phrase => text.includes(phrase));
-    
+
     // Heuristic: If it's a DSA question (generic titles usually don't mention a language), we allow change.
     // If the backend specifically said "java" but the description is generic, we allow change.
     return hasLockPhrase;
@@ -657,15 +701,15 @@ ${questionsRef.current.map((q, i) => `${i+1}. ${q}`).join('\n')}
     const newLang = e.target.value;
     const cacheKey = `${currentQuestionIdx}_${language}`;
     setCodeCaches(prev => ({ ...prev, [cacheKey]: code }));
-    
+
     // ISOLATION: When language changes, we clear execution history for this task 
     // to prevent mixing errors from different languages.
     setExecutionHistory(prev => ({ ...prev, [`${currentQuestionIdx}_${newLang}`]: [] }));
-    
-    const nextCode = codeCaches[`${currentQuestionIdx}_${newLang}`] !== undefined 
-      ? codeCaches[`${currentQuestionIdx}_${newLang}`] 
+
+    const nextCode = codeCaches[`${currentQuestionIdx}_${newLang}`] !== undefined
+      ? codeCaches[`${currentQuestionIdx}_${newLang}`]
       : boilerplates[newLang];
-      
+
     setCode(nextCode);
     setLanguage(newLang);
     setConsoleOutput(`Language switched to ${newLang.toUpperCase()}. Console reset.\n`);
@@ -674,11 +718,11 @@ ${questionsRef.current.map((q, i) => `${i+1}. ${q}`).join('\n')}
   const switchToQuestion = (idx) => {
     // Save current question state
     setCodeCaches(prev => ({ ...prev, [`${currentQuestionIdx}_${language}`]: code }));
-    
+
     // Switch
     const nextQ = codingQuestions[idx];
     const savedCode = codeCaches[`${idx}_${nextQ.language}`];
-    
+
     setCurrentQuestionIdx(idx);
     setCodingTask(nextQ.problemStatement);
     setLanguage(nextQ.language);
@@ -689,16 +733,16 @@ ${questionsRef.current.map((q, i) => `${i+1}. ${q}`).join('\n')}
   const runCode = async () => {
     setIsRunning(true);
     setConsoleOutput('Compiling & Running...\n');
-    
+
     try {
       const currentQ = codingQuestions[currentQuestionIdx];
       const historyKey = `${currentQuestionIdx}_${language}`;
       const historyForLang = executionHistory[historyKey] || [];
-      const historyContext = historyForLang.length > 0 
-        ? `\n\nContext - The user previously ran these commands in this exact session for this specific task:\n${historyForLang.map((h, i) => `[Execution ${i+1}]\nCode:\n${h.code}\nOutput:\n${h.output}`).slice(-5).join('\n\n')}\n\nMaintain this state.` 
+      const historyContext = historyForLang.length > 0
+        ? `\n\nContext - The user previously ran these commands in this exact session for this specific task:\n${historyForLang.map((h, i) => `[Execution ${i + 1}]\nCode:\n${h.code}\nOutput:\n${h.output}`).slice(-5).join('\n\n')}\n\nMaintain this state.`
         : '';
 
-      const testCaseStr = (currentQ.testCases || []).map((tc, i) => `Test Case ${i+1}: Input: ${tc.input}, Expected: ${tc.expected || tc.expectedOutput}`).join('\n');
+      const testCaseStr = (currentQ.testCases || []).map((tc, i) => `Test Case ${i + 1}: Input: ${tc.input}, Expected: ${tc.expected || tc.expectedOutput}`).join('\n');
 
       const prompt = `You are a strict, secure compiler and execution environment for ${language}. 
       Task: ${currentQ.title}
@@ -748,13 +792,13 @@ ${questionsRef.current.map((q, i) => `${i+1}. ${q}`).join('\n')}
 
       const isPassed = parsed.status === 'PASS';
       const passedCount = parsed.passed_count;
-      
+
       setTestResults(parsed.test_results || []);
       setConsoleOutput(prev => prev + '\n' + (parsed.explanation || (isPassed ? "Tests Passed Successfully" : "Some tests failed.")));
-      
+
       const total = currentQ.testCases?.length || 0;
       const passedMatch = passedCount?.split('/')[0] || 0;
-      
+
       setTasksResults(prev => ({
         ...prev,
         [currentQuestionIdx]: { passed: isPassed, count: `${passedMatch}/${total}` }
@@ -778,27 +822,27 @@ ${questionsRef.current.map((q, i) => `${i+1}. ${q}`).join('\n')}
       const result = tasksResults[idx];
       const savedCode = idx === currentQuestionIdx ? code : (codeCaches[`${idx}_${q.language}`] || q.starterCode);
       const isPassed = result?.passed;
-      
+
       // We only send the first 1000 characters of code per task to the AI to prevent 
       // crashing the Realtime API session, while still providing enough for evaluation.
       const codeSnippet = savedCode.length > 1000 ? savedCode.substring(0, 1000) + "\n... [Code Truncated for Length]" : savedCode;
-      
-      return `Task ${idx+1} (${q.title}): ${isPassed ? 'PASSED' : 'FAILED'} [${result?.count || '0'} Tests]
+
+      return `Task ${idx + 1} (${q.title}): ${isPassed ? 'PASSED' : 'FAILED'} [${result?.count || '0'} Tests]
 Language: ${q.language}
 Solution:
 ${codeSnippet}`;
     }).join('\n---\n');
 
     addMessage('user', `Status Update: I have submitted solutions for ${codingQuestions.length} tasks.`);
-    
+
     if (dcRef.current?.readyState === 'open') {
       dcRef.current.send(JSON.stringify({
         type: "conversation.item.create",
-        item: { 
-          type: "message", 
-          role: "user", 
-          content: [{ 
-            type: "input_text", 
+        item: {
+          type: "message",
+          role: "user",
+          content: [{
+            type: "input_text",
             text: `[SYSTEM NOTIFICATION: CODING SUBMISSION RECEIVED]
 Below are my results for the technical challenges:
 
@@ -808,8 +852,8 @@ AI Interviewer Action:
 1. Briefly acknowledge that I have finished the coding part.
 2. Evaluate my code quality and logic based on the snippets provided.
 3. Decide if I should be SHORTLISTED based on BOTH behavioral and coding performance.
-4. Provide a closing statement and say "INTERVIEW_COMPLETE".` 
-          }] 
+4. Provide a closing statement and say "INTERVIEW_COMPLETE".`
+          }]
         }
       }));
       dcRef.current.send(JSON.stringify({ type: "response.create" }));
@@ -849,10 +893,10 @@ AI Interviewer Action:
       {showWarning && (
         <div className="cheat-warning-overlay">
           <AlertCircle size={64} color="#ea4335" />
-          <h1 style={{color: '#ea4335'}}>PROCTOR WARNING</h1>
+          <h1 style={{ color: '#ea4335' }}>PROCTOR WARNING</h1>
           <p>{warningReason}</p>
           <p>Warning ({warningCount}/2). Another violation will end the interview.</p>
-          <button className="btn-meet-join" style={{background: '#ea4335', color: 'white'}} onClick={resumeFromWarning}>
+          <button className="btn-meet-join" style={{ background: '#ea4335', color: 'white' }} onClick={resumeFromWarning}>
             I Understand - Return
           </button>
         </div>
@@ -866,7 +910,7 @@ AI Interviewer Action:
           </div>
           <div className="meet-join-area">
             <h1>Ready to join?</h1>
-            <p>Role: <strong>{jobTitle}</strong><br/><br/>You must share your entire screen and allow Mic and Camera access to proceed.</p>
+            <p>Role: <strong>{jobTitle}</strong><br /><br />You must share your entire screen and allow Mic and Camera access to proceed.</p>
             <button className="btn-meet-join" onClick={startInterview}>Join now</button>
           </div>
         </div>
@@ -884,13 +928,13 @@ AI Interviewer Action:
                       <span>Talent Fold Coding Tasks</span>
                       {timeLeft > 0 && (
                         <div className={`timer-badge ${timeLeft < 300 ? 'urgent' : ''}`}>
-                           Time remaining: {formatTimeLeft(timeLeft)}
+                          Time remaining: {formatTimeLeft(timeLeft)}
                         </div>
                       )}
                     </div>
                     <div className="language-selector">
-                      <select 
-                        value={language} 
+                      <select
+                        value={language}
                         onChange={handleLanguageChange}
                         disabled={isCurrentQuestionLocked}
                         title={isCurrentQuestionLocked ? `This task is restricted to ${codingQuestions[currentQuestionIdx].language}` : "Change Language"}
@@ -898,6 +942,7 @@ AI Interviewer Action:
                         <option value="javascript">JavaScript</option>
                         <option value="python">Python</option>
                         <option value="java">Java</option>
+                        <option value="go">Golang</option>
                         <option value="cpp">C++</option>
                         <option value="c">C</option>
                         <option value="csharp">C#</option>
@@ -915,7 +960,7 @@ AI Interviewer Action:
                     </div>
                     <div className="coding-actions">
                       <button className="run-btn" onClick={runCode} disabled={isRunning}>
-                        {isRunning ? <div className="upload-spinner" style={{width: 14, height: 14}} /> : <Play size={16} />}
+                        {isRunning ? <div className="upload-spinner" style={{ width: 14, height: 14 }} /> : <Play size={16} />}
                         Run
                       </button>
                       <button className="submit-btn" onClick={submitCode}>
@@ -928,8 +973,8 @@ AI Interviewer Action:
                     <div className="task-sidebar">
                       <div className="task-list-nav">
                         {codingQuestions.map((q, idx) => (
-                          <button 
-                            key={idx} 
+                          <button
+                            key={idx}
                             className={`task-nav-item ${idx === currentQuestionIdx ? 'active' : ''} ${tasksResults[idx]?.passed ? 'passed' : ''}`}
                             onClick={() => switchToQuestion(idx)}
                           >
@@ -939,7 +984,7 @@ AI Interviewer Action:
                         ))}
                       </div>
 
-                      <div className="task-meta-header" style={{marginTop: '15px'}}>
+                      <div className="task-meta-header" style={{ marginTop: '15px' }}>
                         <Trophy size={16} color="#ffd700" />
                         <span>{codingQuestions[currentQuestionIdx].difficulty}</span>
                         {codingQuestions[currentQuestionIdx].language && (
@@ -948,7 +993,7 @@ AI Interviewer Action:
                       </div>
                       <h3>{codingQuestions[currentQuestionIdx].title}</h3>
                       <p>{codingTask || "Please solve the problem described by the interviewer."}</p>
-                      
+
                       {codingQuestions[currentQuestionIdx].constraints && codingQuestions[currentQuestionIdx].constraints.length > 0 && (
                         <div className="task-meta-section">
                           <h4>Constraints</h4>
@@ -960,13 +1005,13 @@ AI Interviewer Action:
 
                       {codingQuestions[currentQuestionIdx].hints && codingQuestions[currentQuestionIdx].hints.length > 0 && (
                         <div className="task-meta-section">
-                           <h4>Hints</h4>
-                           {codingQuestions[currentQuestionIdx].hints.map((h, idx) => (
-                             <details key={idx} className="hint-details">
-                               <summary>Hint {idx + 1}</summary>
-                               <p>{h}</p>
-                             </details>
-                           ))}
+                          <h4>Hints</h4>
+                          {codingQuestions[currentQuestionIdx].hints.map((h, idx) => (
+                            <details key={idx} className="hint-details">
+                              <summary>Hint {idx + 1}</summary>
+                              <p>{h}</p>
+                            </details>
+                          ))}
                         </div>
                       )}
 
@@ -976,15 +1021,15 @@ AI Interviewer Action:
                           <span className="tc-mode-tag">Simulated Environment</span>
                         </div>
                         <div className="tc-grid">
-                           {(testResults.length > 0 ? testResults : Array(codingQuestions[currentQuestionIdx].testCases?.length || 0).fill(null)).map((res, i) => (
-                             <div 
-                               key={i} 
-                               className={`tc-box ${res === null ? 'pending' : (res.status === 'PASS' ? 'pass' : 'fail')}`}
-                               title={res ? `Input: ${res.input}\nExpected: ${res.expected}\nActual: ${res.actual}` : `Test Case ${i+1}`}
-                             >
-                               {i}
-                             </div>
-                           ))}
+                          {(testResults.length > 0 ? testResults : Array(codingQuestions[currentQuestionIdx].testCases?.length || 0).fill(null)).map((res, i) => (
+                            <div
+                              key={i}
+                              className={`tc-box ${res === null ? 'pending' : (res.status === 'PASS' ? 'pass' : 'fail')}`}
+                              title={res ? `Input: ${res.input}\nExpected: ${res.expected}\nActual: ${res.actual}` : `Test Case ${i + 1}`}
+                            >
+                              {i}
+                            </div>
+                          ))}
                         </div>
                         {consoleOutput && (
                           <div className="console-area-mini">
@@ -1010,10 +1055,10 @@ AI Interviewer Action:
                   </div>
                   {/* Floating AI Video during coding */}
                   <div className="ai-floating-pip">
-                     <div className={`ai-avatar-wrapper small ${isAiTalking ? 'ai-talking' : ''}`}>
-                        <div className="ai-ring" />
-                        <div className="ai-avatar" style={{width: 60, height: 60, fontSize: '1.5rem'}}>🤖</div>
-                      </div>
+                    <div className={`ai-avatar-wrapper small ${isAiTalking ? 'ai-talking' : ''}`}>
+                      <div className="ai-ring" />
+                      <div className="ai-avatar" style={{ width: 60, height: 60, fontSize: '1.5rem' }}>🤖</div>
+                    </div>
                   </div>
                 </div>
               ) : (
@@ -1038,9 +1083,9 @@ AI Interviewer Action:
                   <MessageSquare size={20} />
                 </div>
                 <div className="sidebar-notice">
-                  <Info size={16} color="#8ab4f8" style={{marginTop: 4}} />
+                  <Info size={16} color="#8ab4f8" style={{ marginTop: 4 }} />
                   <div>
-                    <strong>Continuous chat sync is ON</strong><br/>
+                    <strong>Continuous chat sync is ON</strong><br />
                     Transcripts are saved automatically.
                   </div>
                 </div>
@@ -1069,14 +1114,14 @@ AI Interviewer Action:
               {currentTime} | {effectiveUserId?.substring(0, 12)}
             </div>
             <div className="bottom-center">
-              <button 
-                className={`meet-btn ${isMicMuted ? 'danger' : ''}`} 
+              <button
+                className={`meet-btn ${isMicMuted ? 'danger' : ''}`}
                 onClick={toggleMic}
               >
                 {isMicMuted ? <MicOff size={22} /> : <Mic size={22} />}
               </button>
-              <button 
-                className={`meet-btn ${!isCameraActive ? 'danger' : ''}`} 
+              <button
+                className={`meet-btn ${!isCameraActive ? 'danger' : ''}`}
                 onClick={toggleCamera}
               >
                 {isCameraActive ? <Video size={22} /> : <VideoOff size={22} />}
@@ -1089,19 +1134,21 @@ AI Interviewer Action:
               </button>
             </div>
             <div className="bottom-right" style={{ display: 'flex', alignItems: 'center', gap: '15px' }}>
-              <button 
-                className={`meet-btn ${isCodingMode ? 'active' : ''}`} 
-                onClick={() => setIsCodingMode(!isCodingMode)}
-                title="Toggle Coding Editor (Test Mode)"
-              >
-                <Code size={20} />
-              </button>
+              {isCodingRoundEnabled && (
+                <button
+                  className={`meet-btn ${isCodingMode ? 'active' : ''}`}
+                  onClick={() => setIsCodingMode(!isCodingMode)}
+                  title="Toggle Coding Editor (Test Mode)"
+                >
+                  <Code size={20} />
+                </button>
+              )}
               <Info size={24} style={{ cursor: 'pointer' }} />
               <Users size={24} style={{ cursor: 'pointer' }} />
               <MessageSquare size={24} color="#8ab4f8" style={{ cursor: 'pointer' }} />
             </div>
           </div>
-          <audio ref={audioElRef} autoPlay style={{display: 'none'}} />
+          <audio ref={audioElRef} autoPlay style={{ display: 'none' }} />
         </div>
       )}
     </div>
