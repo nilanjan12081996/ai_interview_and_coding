@@ -469,7 +469,7 @@ const MeetPage = () => {
 
     requestFullScreen();
     setStatus('interviewing');
-    setIsCodingMode(true);
+    setIsCodingMode(false);
     startTimeRef.current = Date.now();
 
     // logics for interview type as per === 1
