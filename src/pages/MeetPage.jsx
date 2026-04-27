@@ -109,6 +109,7 @@ const MeetPage = () => {
     codingQuestionsRef.current = codingQuestions;
   }, [codingQuestions]);
 
+
   useEffect(() => {
     currentIdxRef.current = currentQuestionIdx;
   }, [currentQuestionIdx]);
@@ -130,6 +131,12 @@ const MeetPage = () => {
   const activeUploadsRef = useRef(0);
   const jobDataRef = useRef({ experience: 'N/A', mandatorySkills: '', niceToHaveSkills: '' });
   const questionsRef = useRef([]);
+
+  useEffect(() => {
+    if (videoRef.current && localStreamRef.current) {
+      videoRef.current.srcObject = localStreamRef.current;
+    }
+  }, [isCodingMode, status]);
 
 
   // Initial Data Fetch
@@ -419,7 +426,7 @@ const MeetPage = () => {
       localStreamRef.current = await navigator.mediaDevices.getUserMedia({ audio: true, video: true });
       if (videoRef.current) videoRef.current.srcObject = localStreamRef.current;
     } catch (err) {
-      alert(`Camera/Microphone Error: ${err.name} - ${err.message}. Please check if you have a camera/mic connected, and close other apps (Zoom, Teams) that might be using it.`); 
+      alert(`Camera/Microphone Error: ${err.name} - ${err.message}. Please check if you have a camera/mic connected, and close other apps (Zoom, Teams) that might be using it.`);
       return;
     }
 

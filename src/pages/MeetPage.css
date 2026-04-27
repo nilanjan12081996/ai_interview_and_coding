@@ -57,12 +57,17 @@
 .btn-meet-join:disabled { background-color: #5f6368; cursor: not-allowed; }
 
 /* IN-CALL SCREEN */
-.screen-interview { display: flex; height: 100vh; flex-direction: column; }
+.screen-interview { 
+  display: flex; 
+  height: 100vh; 
+  flex-direction: column;
+  position: relative;  
+}
 .meet-workspace { display: flex; flex: 1; overflow: hidden; padding: 16px; gap: 16px; }
 
 .meet-main-stage {
   flex: 1; background-color: #3c4043; border-radius: 8px;
-  display: flex; align-items: center; justify-content: center; position: relative; overflow: hidden;
+  display: flex; align-items: center; justify-content: center; position: relative; overflow: visible;
 }
 .ai-avatar-wrapper { position: relative; display: flex; align-items: center; justify-content: center; }
 .ai-avatar {
@@ -86,13 +91,28 @@
   padding: 4px 10px; border-radius: 4px; font-size: 0.8rem; display: flex; align-items: center; gap: 6px;
 }
 
-.self-video-container {
+/* .self-video-container {
   position: absolute; bottom: 16px; right: 16px;
   width: 200px; height: 130px; background: #202124;
   border-radius: 8px; overflow: hidden;
   box-shadow: 0 4px 10px rgba(0,0,0,0.5); z-index: 10;
   border: 1px solid #5f6368;
+} */
+
+.self-video-container {
+  position: absolute;  /* fixed এর বদলে absolute */
+  bottom: 16px;
+  right: 16px;
+  width: 200px;
+  height: 130px;
+  background: #202124;
+  border-radius: 8px;
+  overflow: hidden;
+  box-shadow: 0 4px 10px rgba(0,0,0,0.5);
+  z-index: 9999999;
+  border: 1px solid #5f6368;
 }
+
 .self-video-container video {
   width: 100%; height: 100%; object-fit: cover;
   transform: scaleX(-1);
