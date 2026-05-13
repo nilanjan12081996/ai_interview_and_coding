@@ -67,6 +67,7 @@ const MeetPage = () => {
   const [isUploading, setIsUploading] = useState(true);
   const [isCodingRoundEnabled, setIsCodingRoundEnabled] = useState(true);
 
+
   // Coding Mode State
   const boilerplates = {
     javascript: '// Write your JavaScript code here\n',
@@ -101,6 +102,7 @@ const MeetPage = () => {
   const [consoleOutput, setConsoleOutput] = useState('');
   const [timeLeft, setTimeLeft] = useState(0); // seconds
   const [testResults, setTestResults] = useState([]); // Array of { id, status, input, expected, actual }
+  const [showSubmitConfirm, setShowSubmitConfirm] = useState(false);
 
   const codingQuestionsRef = useRef(codingQuestions);
   const currentIdxRef = useRef(currentQuestionIdx);
@@ -369,6 +371,7 @@ const MeetPage = () => {
       formData.append("Nice_to_have_skills", jobDataRef.current.niceToHaveSkills);
       formData.append("user_id", effectiveUserId);
       const res = await axios.post(`${PROCESS_TEXT_API_URL}/api/v1/process-text`, formData);
+      console.log('myRes', res)
       await axios.post(`${EXTERNAL_API_URL}/analysis/ai/`, { token: effectiveUserId, analysis: JSON.stringify(res.data) });
     } catch (e) { console.error("Sync failed", e); }
   };
@@ -823,25 +826,102 @@ ${questionsRef.current.map((q, i) => `${i + 1}. ${q}`).join('\n')}
     }
   };
 
-  const submitCode = () => {
-    // SECURITY: Generate a structured summary to prevent AI context bloating
-    const summary = codingQuestions.map((q, idx) => {
+  //   const submitCode = () => {
+  //     // SECURITY: Generate a structured summary to prevent AI context bloating
+  //     const summary = codingQuestions.map((q, idx) => {
+  //       const result = tasksResults[idx];
+  //       const savedCode = idx === currentQuestionIdx ? code : (codeCaches[`${idx}_${q.language}`] || q.starterCode);
+  //       const isPassed = result?.passed;
+
+  //       // We only send the first 1000 characters of code per task to the AI to prevent 
+  //       // crashing the Realtime API session, while still providing enough for evaluation.
+  //       const codeSnippet = savedCode.length > 1000 ? savedCode.substring(0, 1000) + "\n... [Code Truncated for Length]" : savedCode;
+
+  //       return `Task ${idx + 1} (${q.title}): ${isPassed ? 'PASSED' : 'FAILED'} [${result?.count || '0'} Tests]
+  // Language: ${q.language}
+  // Solution:
+  // ${codeSnippet}`;
+  //     }).join('\n---\n');
+
+  //     addMessage('user', `Status Update: I have submitted solutions for ${codingQuestions.length} tasks.`);
+
+  //     if (dcRef.current?.readyState === 'open') {
+  //       dcRef.current.send(JSON.stringify({
+  //         type: "conversation.item.create",
+  //         item: {
+  //           type: "message",
+  //           role: "user",
+  //           content: [{
+  //             type: "input_text",
+  //             text: `[SYSTEM NOTIFICATION: CODING SUBMISSION RECEIVED]
+  // Below are my results for the technical challenges:
+
+  // ${summary}
+
+  // AI Interviewer Action:
+  // 1. Briefly acknowledge that I have finished the coding part.
+  // 2. Evaluate my code quality and logic based on the snippets provided.
+  // 3. Decide if I should be SHORTLISTED based on BOTH behavioral and coding performance.
+  // 4. Provide a closing statement and say "INTERVIEW_COMPLETE".`
+  //           }]
+  //         }
+  //       }));
+  //       dcRef.current.send(JSON.stringify({ type: "response.create" }));
+  //     }
+
+  //     setIsCodingMode(false);
+  //   };
+
+  const confirmSubmitCode = async () => {
+    setShowSubmitConfirm(false);
+
+    // 1. Prepare data for both AI and Database
+    const submissionData = codingQuestions.map((q, idx) => {
       const result = tasksResults[idx];
       const savedCode = idx === currentQuestionIdx ? code : (codeCaches[`${idx}_${q.language}`] || q.starterCode);
       const isPassed = result?.passed;
 
-      // We only send the first 1000 characters of code per task to the AI to prevent 
-      // crashing the Realtime API session, while still providing enough for evaluation.
-      const codeSnippet = savedCode.length > 1000 ? savedCode.substring(0, 1000) + "\n... [Code Truncated for Length]" : savedCode;
+      return {
+        question: q,
+        idx,
+        savedCode,
+        isPassed,
+        testCount: result?.count || '0'
+      };
+    });
 
-      return `Task ${idx + 1} (${q.title}): ${isPassed ? 'PASSED' : 'FAILED'} [${result?.count || '0'} Tests]
-Language: ${q.language}
+    // 2. Save answers to the Spring Boot Backend
+    try {
+      const savePromises = submissionData.map(data => {
+        const payload = {
+          token: effectiveUserId,
+          questionId: data.question.id || data.question.questionId || (data.idx + 1),
+          ans: JSON.stringify({ code: data.savedCode })
+        };
+        return axios.post(`${EXTERNAL_API_URL}/api/aiinterview/coding/ans/save`, payload);
+      });
+
+      await Promise.all(savePromises);
+      console.log("All coding answers successfully saved to DB.");
+    } catch (error) {
+      console.error("Failed to save coding answers:", error);
+    }
+
+    // 3. Generate summary for the AI
+    const summary = submissionData.map(data => {
+      const codeSnippet = data.savedCode.length > 1000
+        ? data.savedCode.substring(0, 1000) + "\n... [Code Truncated for Length]"
+        : data.savedCode;
+
+      return `Task ${data.idx + 1} (${data.question.title}): ${data.isPassed ? 'PASSED' : 'FAILED'} [${data.testCount} Tests]
+Language: ${data.question.language}
 Solution:
 ${codeSnippet}`;
     }).join('\n---\n');
 
     addMessage('user', `Status Update: I have submitted solutions for ${codingQuestions.length} tasks.`);
 
+    // 4. Send instructions to the AI via WebRTC Data Channel
     if (dcRef.current?.readyState === 'open') {
       dcRef.current.send(JSON.stringify({
         type: "conversation.item.create",
@@ -866,9 +946,9 @@ AI Interviewer Action:
       dcRef.current.send(JSON.stringify({ type: "response.create" }));
     }
 
+    // 5. Exit coding mode
     setIsCodingMode(false);
   };
-
 
   // Renderers
   if (status === 'error') return (
@@ -897,6 +977,27 @@ AI Interviewer Action:
 
   return (
     <div className="meet-fullscreen-wrapper">
+      {/* --- Submit Confirmation Popup  --- */}
+      {showSubmitConfirm && (
+        <div className="submit-confirm-overlay">
+          <div className="submit-confirm-box">
+            <AlertCircle size={56} color="#fbbc04" />
+            <h2>Final Submission?</h2>
+            <p>
+              Are you sure you want to submit your answers? <br />
+              Once submitted, the coding round will end immediately and you will not be able to modify your code.
+            </p>
+            <div className="submit-confirm-actions">
+              <button className="btn-cancel" onClick={() => setShowSubmitConfirm(false)}>
+                No, Keep Coding
+              </button>
+              <button className="btn-confirm" onClick={confirmSubmitCode}>
+                Yes, Submit Now
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
       {showWarning && (
         <div className="cheat-warning-overlay">
           <AlertCircle size={64} color="#ea4335" />
@@ -970,7 +1071,11 @@ AI Interviewer Action:
                         {isRunning ? <div className="upload-spinner" style={{ width: 14, height: 14 }} /> : <Play size={16} />}
                         Run
                       </button>
-                      <button className="submit-btn" onClick={submitCode}>
+                      {/* <button className="submit-btn" onClick={submitCode}>
+                        <Send size={16} />
+                        Submit
+                      </button> */}
+                      <button className="submit-btn" onClick={() => setShowSubmitConfirm(true)}>
                         <Send size={16} />
                         Submit
                       </button>
