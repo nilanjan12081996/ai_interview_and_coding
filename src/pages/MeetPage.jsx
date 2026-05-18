@@ -872,6 +872,84 @@ ${questionsRef.current.map((q, i) => `${i + 1}. ${q}`).join('\n')}
   //     setIsCodingMode(false);
   //   };
 
+  //   const confirmSubmitCode = async () => {
+  //     setShowSubmitConfirm(false);
+
+  //     // 1. Prepare data for both AI and Database
+  //     const submissionData = codingQuestions.map((q, idx) => {
+  //       const result = tasksResults[idx];
+  //       const savedCode = idx === currentQuestionIdx ? code : (codeCaches[`${idx}_${q.language}`] || q.starterCode);
+  //       const isPassed = result?.passed;
+
+  //       return {
+  //         question: q,
+  //         idx,
+  //         savedCode,
+  //         isPassed,
+  //         testCount: result?.count || '0'
+  //       };
+  //     });
+
+  //     // 2. Save answers to the Spring Boot Backend
+  //     try {
+  //       const savePromises = submissionData.map(data => {
+  //         const payload = {
+  //           token: effectiveUserId,
+  //           questionId: data.question.id || data.question.questionId || (data.idx + 1),
+  //           ans: JSON.stringify({ code: data.savedCode })
+  //         };
+  //         return axios.post(`${EXTERNAL_API_URL}/api/aiinterview/coding/ans/save`, payload);
+  //       });
+
+  //       await Promise.all(savePromises);
+  //       console.log("All coding answers successfully saved to DB.");
+  //     } catch (error) {
+  //       console.error("Failed to save coding answers:", error);
+  //     }
+
+  //     // 3. Generate summary for the AI
+  //     const summary = submissionData.map(data => {
+  //       const codeSnippet = data.savedCode.length > 1000
+  //         ? data.savedCode.substring(0, 1000) + "\n... [Code Truncated for Length]"
+  //         : data.savedCode;
+
+  //       return `Task ${data.idx + 1} (${data.question.title}): ${data.isPassed ? 'PASSED' : 'FAILED'} [${data.testCount} Tests]
+  // Language: ${data.question.language}
+  // Solution:
+  // ${codeSnippet}`;
+  //     }).join('\n---\n');
+
+  //     addMessage('user', `Status Update: I have submitted solutions for ${codingQuestions.length} tasks.`);
+
+  //     // 4. Send instructions to the AI via WebRTC Data Channel
+  //     if (dcRef.current?.readyState === 'open') {
+  //       dcRef.current.send(JSON.stringify({
+  //         type: "conversation.item.create",
+  //         item: {
+  //           type: "message",
+  //           role: "user",
+  //           content: [{
+  //             type: "input_text",
+  //             text: `[SYSTEM NOTIFICATION: CODING SUBMISSION RECEIVED]
+  // Below are my results for the technical challenges:
+
+  // ${summary}
+
+  // AI Interviewer Action:
+  // 1. Briefly acknowledge that I have finished the coding part.
+  // 2. Evaluate my code quality and logic based on the snippets provided.
+  // 3. Decide if I should be SHORTLISTED based on BOTH behavioral and coding performance.
+  // 4. Provide a closing statement and say "INTERVIEW_COMPLETE".`
+  //           }]
+  //         }
+  //       }));
+  //       dcRef.current.send(JSON.stringify({ type: "response.create" }));
+  //     }
+
+  //     // 5. Exit coding mode
+  //     setIsCodingMode(false);
+  //   };
+
   const confirmSubmitCode = async () => {
     setShowSubmitConfirm(false);
 
@@ -890,19 +968,70 @@ ${questionsRef.current.map((q, i) => `${i + 1}. ${q}`).join('\n')}
       };
     });
 
-    // 2. Save answers to the Spring Boot Backend
+    // 2. Save answers to the Spring Boot Backend sequentially and accumulate answers
     try {
-      const savePromises = submissionData.map(data => {
+      let accumulatedAnswers = [];
+      let generatedId = null;
+
+      for (let i = 0; i < submissionData.length; i++) {
+        const data = submissionData[i];
+
+        // 🌟 FULLY DETAILED & CLEAN JSON OBJECT FOR BACKEND DEVS 🌟
+        const currentAnswerObj = {
+          taskNumber: data.idx + 1,
+          questionDetails: {
+            title: data.question.title,
+            difficulty: data.question.difficulty,
+            // 👈 Etai holo asol boro question ta (Problem Statement)
+            problemStatement: data.question.problemStatement || "N/A",
+            constraints: data.question.constraints || [],
+            hints: data.question.hints || []
+          },
+          candidateAnswer: {
+            techStack: data.question.language,
+            submittedCode: data.savedCode
+          },
+          evaluation: {
+            status: data.isPassed ? "PASSED" : "FAILED",
+            testCasesPassed: data.testCount,
+            totalTestCases: data.question.testCases ? data.question.testCases.length : 0,
+            // 👈 Developer er bojhar jonno full test case er list
+            testCasesDetails: data.question.testCases || []
+          },
+          timeData: {
+            timeRemainingSeconds: timeLeft,
+            submittedAt: new Date().toLocaleString()
+          }
+        };
+
+        // Purono answers er sathe notun clean object ta add kora hocche
+        accumulatedAnswers.push(currentAnswerObj);
+
+        // Payload toiri (JSON.stringify(..., null, 2) deway backend e dekhte sundar hobe)
         const payload = {
           token: effectiveUserId,
           questionId: data.question.id || data.question.questionId || (data.idx + 1),
-          ans: JSON.stringify({ code: data.savedCode })
+          ans: JSON.stringify(accumulatedAnswers, null, 2)
         };
-        return axios.post(`${EXTERNAL_API_URL}/api/aiinterview/coding/ans/save`, payload);
-      });
 
-      await Promise.all(savePromises);
-      console.log("All coding answers successfully saved to DB.");
+        // 1st call er por ID thakle seta add kora hocche
+        if (generatedId) {
+          payload.id = generatedId;
+        }
+
+        // API Call
+        const response = await axios.post(`${EXTERNAL_API_URL}/api/aiinterview/coding/ans/save`, payload);
+
+        // ID save
+        if (i === 0) {
+          generatedId = response.data?.data?.id;
+          console.log("1st coding answer saved. Received ID:", generatedId);
+        } else {
+          console.log(`Coding answer ${i + 1} saved successfully.`);
+        }
+      }
+
+      console.log("All coding answers successfully saved to DB sequentially.");
     } catch (error) {
       console.error("Failed to save coding answers:", error);
     }
