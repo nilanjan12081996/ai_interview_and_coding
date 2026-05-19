@@ -144,6 +144,14 @@ const MeetPage = () => {
   // Initial Data Fetch
   useEffect(() => {
     const fetchInitialData = async () => {
+      const checkAlreadyCompleted = (err) => {
+        if (err.response && err.response.status === 400 && err.response.data && err.response.data.message === "Interview already completed") {
+          setStatus('already_completed');
+          return true;
+        }
+        return false;
+      };
+
       // 0. Fetch Coding Question (Prioritize so it's ready)
       console.log("Checking for coding question with token:", effectiveUserId);
       try {
@@ -192,6 +200,7 @@ const MeetPage = () => {
           console.warn("No questions found in the API response data.");
         }
       } catch (codingErr) {
+        if (checkAlreadyCompleted(codingErr)) return;
         console.error('Failed to fetch dynamic coding question:', codingErr);
       }
 
@@ -217,6 +226,7 @@ const MeetPage = () => {
             setJobTitle(resRole.data.data.role);
           }
         } catch (roleErr) {
+          if (checkAlreadyCompleted(roleErr)) return;
           console.warn('Could not fetch dynamic job role:', roleErr);
         }
 
@@ -238,6 +248,8 @@ const MeetPage = () => {
         }
       } catch (err) {
         console.error("Initial data fetch failed", err);
+        if (checkAlreadyCompleted(err)) return;
+        
         setErrorMessage("Connection to interview servers failed.");
         setStatus('error');
       }
@@ -372,7 +384,7 @@ const MeetPage = () => {
       formData.append("user_id", effectiveUserId);
       const res = await axios.post(`${PROCESS_TEXT_API_URL}/api/v1/process-text`, formData);
       console.log('myRes', res)
-      await axios.post(`${EXTERNAL_API_URL}/analysis/ai/`, { token: effectiveUserId, analysis: JSON.stringify(res.data) });
+      await axios.post(`${EXTERNAL_API_URL}/analysis/ai`, { token: effectiveUserId, analysis: JSON.stringify(res.data) });
     } catch (e) { console.error("Sync failed", e); }
   };
 
@@ -667,6 +679,18 @@ ${questionsRef.current.map((q, i) => `${i + 1}. ${q}`).join('\n')}
     setMessages(prev => [...prev, { who, text, time: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) }]);
     setTimeout(() => { if (convoRef.current) convoRef.current.scrollTop = convoRef.current.scrollHeight; }, 100);
   };
+
+  useEffect(() => {
+    if (status === 'done' && isCodingRoundEnabled) {
+      axios.get(`${PROCESS_TEXT_API_URL}/api/v1/coding-interview/analyze?token=${effectiveUserId}`)
+        .then(response => {
+          console.log("Coding interview analyze response:", response.data);
+        })
+        .catch(error => {
+          console.error("Failed to analyze coding interview:", error);
+        });
+    }
+  }, [status, isCodingRoundEnabled, effectiveUserId]);
 
   const finishInterview = () => {
     setStatus('done');
@@ -1085,6 +1109,27 @@ AI Interviewer Action:
       <AlertCircle size={64} color="#ea4335" />
       <h1>Access Denied</h1>
       <p>{errorMessage}</p>
+    </div>
+  );
+
+  if (status === 'already_completed') return (
+    <div className="meet-fullscreen-wrapper screen-done" style={{ background: 'linear-gradient(135deg, #1e1e1e 0%, #121212 100%)', display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', height: '100vh', textAlign: 'center' }}>
+      <div style={{ background: 'rgba(255, 255, 255, 0.05)', padding: '40px', borderRadius: '16px', boxShadow: '0 8px 32px rgba(0,0,0,0.3)', border: '1px solid rgba(255,255,255,0.1)' }}>
+        <CheckCircle2 size={72} color="#34a853" style={{ marginBottom: '20px', filter: 'drop-shadow(0 0 10px rgba(52,168,83,0.5))' }} />
+        <h1 style={{ color: '#ffffff', fontSize: '2.5rem', margin: '0 0 15px 0', fontWeight: '600' }}>Interview Completed</h1>
+        <p style={{ color: '#a8c7fa', fontSize: '1.2rem', maxWidth: '500px', margin: '0 auto 30px auto', lineHeight: '1.6' }}>
+          You have already successfully completed this interview session. Your responses have been recorded and are being evaluated.
+        </p>
+        <button 
+          className="btn-return" 
+          onClick={() => window.location.href = '/'}
+          style={{ padding: '12px 30px', fontSize: '1.1rem', background: '#4285f4', border: 'none', borderRadius: '8px', color: 'white', cursor: 'pointer', transition: 'background 0.2s', boxShadow: '0 4px 12px rgba(66,133,244,0.3)' }}
+          onMouseOver={(e) => e.target.style.background = '#3b78e7'}
+          onMouseOut={(e) => e.target.style.background = '#4285f4'}
+        >
+          Return Home
+        </button>
+      </div>
     </div>
   );
 
