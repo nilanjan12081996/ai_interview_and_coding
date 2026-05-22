@@ -133,6 +133,8 @@ const MeetPage = () => {
   const activeUploadsRef = useRef(0);
   const jobDataRef = useRef({ experience: 'N/A', mandatorySkills: '', niceToHaveSkills: '' });
   const questionsRef = useRef([]);
+  const aiBufferRef = useRef('');
+  const userBufferRef = useRef('');
 
   useEffect(() => {
     if (videoRef.current && localStreamRef.current) {
@@ -263,7 +265,7 @@ const MeetPage = () => {
     if (status !== 'interviewing' || timeLeft <= 0) {
       if (timeLeft <= 0 && status === 'interviewing') {
         // GLOBAL TIMEOUT: Submit whatever is currently in the editor and end.
-        if (isCodingMode) submitCode();
+        if (isCodingMode) setShowSubmitConfirm(true);
         else finishInterview();
       }
       return;
@@ -434,7 +436,10 @@ const MeetPage = () => {
         type: "conversation.item.create",
         item: { type: "message", role: "user", content: [{ type: "input_text", text: "System Note: The candidate was briefly interrupted. Please repeat your last question." }] }
       }));
-      dcRef.current.send(JSON.stringify({ type: "response.create" }));
+      dcRef.current.send(JSON.stringify({
+        type: "response.create",
+        response: { output_modalities: ["audio"] }
+      }));
     }
   };
 
@@ -558,25 +563,30 @@ ${questionsRef.current.map((q, i) => `${i + 1}. ${q}`).join('\n')}
 5. DO NOT read question numbers.
 `;
 
-      const sessionRes = await axios.post('https://api.openai.com/v1/realtime/sessions', {
-        model: "gpt-4o-realtime-preview-2024-12-17",
+      const tokenRes = await axios.post(`${PROCESS_TEXT_API_URL}/api/openai/realtime-token`, {
+        instructions,
+        candidateId: effectiveUserId,
+        model: "gpt-realtime-2",
         voice: "cedar",
-        instructions: instructions,
-        modalities: ["audio", "text"],
+        output_modalities: ["audio"],
+        transcription_model: "gpt-4o-transcribe",
         turn_detection: {
           type: "server_vad",
           threshold: 0.5,
           prefix_padding_ms: 300,
           silence_duration_ms: 2000
         },
-        input_audio_transcription: { model: "whisper-1" }
-      }, {
-        headers: {
-          'Authorization': `Bearer ${OPENAI_API_KEY}`,
-          'Content-Type': 'application/json'
-        }
+        additionalConfig: {}
       });
-      setupWebRTC(sessionRes.data.client_secret.value);
+
+      const ephemeralKey = tokenRes.data?.value || tokenRes.data?.client_secret?.value;
+
+      if (!ephemeralKey) {
+        console.error("Realtime token response did not include a value:", tokenRes.data);
+        throw new Error("No ephemeral realtime key returned from backend.");
+      }
+
+      await setupWebRTC(ephemeralKey);
     } catch (e) {
       alert("Failed to start session: " + e.message);
     }
@@ -607,51 +617,99 @@ ${questionsRef.current.map((q, i) => `${i + 1}. ${q}`).join('\n')}
     pcRef.current.ontrack = (e) => {
       if (audioElRef.current) {
         audioElRef.current.srcObject = e.streams[0];
-        remoteAudioSourceRef.current = audioCtxRef.current.createMediaStreamSource(e.streams[0]);
-        remoteAudioSourceRef.current.connect(audioDestRef.current);
+
+        // Mix remote AI audio into the recorded screen recording audio track.
+        try {
+          if (audioCtxRef.current && audioDestRef.current && e.streams[0]) {
+            remoteAudioSourceRef.current = audioCtxRef.current.createMediaStreamSource(e.streams[0]);
+            remoteAudioSourceRef.current.connect(audioDestRef.current);
+          }
+        } catch (err) {
+          console.warn("Could not mix AI audio into recording:", err);
+        }
       }
     };
 
-    localStreamRef.current.getTracks().forEach(t => pcRef.current.addTrack(t, localStreamRef.current));
+    // GA Realtime WebRTC call should receive microphone audio.
+    // Keep camera/screen for your UI, recording, and proctoring; do not send video track to Realtime here.
+    localStreamRef.current.getAudioTracks().forEach((track) => {
+      pcRef.current.addTrack(track, localStreamRef.current);
+    });
 
     dcRef.current = pcRef.current.createDataChannel('oai-events');
+
     dcRef.current.onopen = () => {
-      dcRef.current.send(JSON.stringify({ type: 'response.create' }));
+      console.log("Realtime data channel opened");
+      dcRef.current.send(JSON.stringify({
+        type: 'response.create',
+        response: { output_modalities: ['audio'] }
+      }));
     };
+
     dcRef.current.onmessage = handleDataChannelMessage;
 
     const offer = await pcRef.current.createOffer();
     await pcRef.current.setLocalDescription(offer);
 
-    const sdpRes = await fetch('https://api.openai.com/v1/realtime?model=gpt-4o-realtime-preview-2024-12-17', {
-      method: 'POST', body: offer.sdp,
-      headers: { 'Authorization': `Bearer ${ephemeralKey}`, 'Content-Type': 'application/sdp' }
+    const sdpRes = await fetch('https://api.openai.com/v1/realtime/calls', {
+      method: 'POST',
+      body: offer.sdp,
+      headers: {
+        'Authorization': `Bearer ${ephemeralKey}`,
+        'Content-Type': 'application/sdp'
+      }
     });
-    await pcRef.current.setRemoteDescription({ type: 'answer', sdp: await sdpRes.text() });
+
+    if (!sdpRes.ok) {
+      const errorText = await sdpRes.text();
+      console.error("Realtime SDP exchange failed:", errorText);
+      throw new Error(`Realtime SDP exchange failed with status ${sdpRes.status}`);
+    }
+
+    const answerSdp = await sdpRes.text();
+    await pcRef.current.setRemoteDescription({ type: 'answer', sdp: answerSdp });
   };
 
-  let aiBuffer = '';
-  let userBuffer = '';
   const handleDataChannelMessage = (e) => {
-    const evt = JSON.parse(e.data);
+    let evt;
+    try {
+      evt = JSON.parse(e.data);
+    } catch (parseErr) {
+      console.error("Could not parse Realtime event:", parseErr, e.data);
+      return;
+    }
+
+    console.log("Realtime event:", evt.type, evt);
+
     switch (evt.type) {
+      case 'session.created':
+      case 'session.updated':
+        break;
+
       case 'response.created':
         setIsAiTalking(true);
         break;
+
+      case 'response.output_audio_transcript.delta':
       case 'response.audio_transcript.delta':
-        aiBuffer += evt.delta || '';
+      case 'response.output_text.delta':
+        aiBufferRef.current += evt.delta || '';
         setIsAiTalking(true);
         break;
-      case 'response.audio_transcript.done':
-        if (aiBuffer.trim()) {
-          addMessage('ai', aiBuffer.trim());
 
-          if (aiBuffer.includes('INTERVIEW_COMPLETE')) {
+      case 'response.output_audio_transcript.done':
+      case 'response.audio_transcript.done':
+      case 'response.output_text.done': {
+        const finalText = (evt.transcript || evt.text || aiBufferRef.current || '').trim();
+
+        if (finalText) {
+          addMessage('ai', finalText);
+
+          if (finalText.includes('INTERVIEW_COMPLETE')) {
             setTimeout(finishInterview, 2500);
           }
 
-          // AI Trigger Detection for Coding
-          const lowerText = aiBuffer.toLowerCase();
+          const lowerText = finalText.toLowerCase();
           if (
             lowerText.includes('opened the coding editor') ||
             lowerText.includes('coding task') ||
@@ -660,25 +718,46 @@ ${questionsRef.current.map((q, i) => `${i + 1}. ${q}`).join('\n')}
           ) {
             const qs = codingQuestionsRef.current;
             const idx = currentIdxRef.current;
-            console.log("Triggering Coding Mode with active task:", qs[idx].title);
-            setCodingTask(qs[idx].problemStatement);
-            setLanguage(qs[idx].language);
-            setCode(qs[idx].starterCode);
-            setIsCodingMode(true);
+
+            if (qs[idx]) {
+              console.log("Triggering Coding Mode with active task:", qs[idx].title);
+              setCodingTask(qs[idx].problemStatement);
+              setLanguage(qs[idx].language);
+              setCode(qs[idx].starterCode);
+              setIsCodingMode(true);
+            }
           }
         }
-        aiBuffer = '';
+
+        aiBufferRef.current = '';
         break;
-      case 'response.done':
+      }
+
+      case 'conversation.item.input_audio_transcription.completed':
+      case 'input_audio_transcription.completed': {
+        const transcript = (evt.transcript || evt.item?.content?.[0]?.transcript || '').trim();
+        if (transcript) addMessage('user', transcript);
+        break;
+      }
+
+      case 'input_audio_buffer.speech_started':
+        // Candidate started speaking; AI can be interrupted by server VAD.
+        break;
+
       case 'input_audio_buffer.speech_stopped':
+      case 'response.done':
         setIsAiTalking(false);
         break;
-      case 'conversation.item.input_audio_transcription.completed':
-        addMessage('user', evt.transcript || '');
+
+      case 'error':
+        console.error("Realtime API error:", evt.error || evt);
+        setErrorMessage(evt.error?.message || "Realtime API error");
+        break;
+
+      default:
         break;
     }
   };
-
 
   const addMessage = (who, text) => {
     if (!text.trim()) return;
@@ -856,130 +935,6 @@ ${questionsRef.current.map((q, i) => `${i + 1}. ${q}`).join('\n')}
     }
   };
 
-  //   const submitCode = () => {
-  //     // SECURITY: Generate a structured summary to prevent AI context bloating
-  //     const summary = codingQuestions.map((q, idx) => {
-  //       const result = tasksResults[idx];
-  //       const savedCode = idx === currentQuestionIdx ? code : (codeCaches[`${idx}_${q.language}`] || q.starterCode);
-  //       const isPassed = result?.passed;
-
-  //       // We only send the first 1000 characters of code per task to the AI to prevent 
-  //       // crashing the Realtime API session, while still providing enough for evaluation.
-  //       const codeSnippet = savedCode.length > 1000 ? savedCode.substring(0, 1000) + "\n... [Code Truncated for Length]" : savedCode;
-
-  //       return `Task ${idx + 1} (${q.title}): ${isPassed ? 'PASSED' : 'FAILED'} [${result?.count || '0'} Tests]
-  // Language: ${q.language}
-  // Solution:
-  // ${codeSnippet}`;
-  //     }).join('\n---\n');
-
-  //     addMessage('user', `Status Update: I have submitted solutions for ${codingQuestions.length} tasks.`);
-
-  //     if (dcRef.current?.readyState === 'open') {
-  //       dcRef.current.send(JSON.stringify({
-  //         type: "conversation.item.create",
-  //         item: {
-  //           type: "message",
-  //           role: "user",
-  //           content: [{
-  //             type: "input_text",
-  //             text: `[SYSTEM NOTIFICATION: CODING SUBMISSION RECEIVED]
-  // Below are my results for the technical challenges:
-
-  // ${summary}
-
-  // AI Interviewer Action:
-  // 1. Briefly acknowledge that I have finished the coding part.
-  // 2. Evaluate my code quality and logic based on the snippets provided.
-  // 3. Decide if I should be SHORTLISTED based on BOTH behavioral and coding performance.
-  // 4. Provide a closing statement and say "INTERVIEW_COMPLETE".`
-  //           }]
-  //         }
-  //       }));
-  //       dcRef.current.send(JSON.stringify({ type: "response.create" }));
-  //     }
-
-  //     setIsCodingMode(false);
-  //   };
-
-  //   const confirmSubmitCode = async () => {
-  //     setShowSubmitConfirm(false);
-
-  //     // 1. Prepare data for both AI and Database
-  //     const submissionData = codingQuestions.map((q, idx) => {
-  //       const result = tasksResults[idx];
-  //       const savedCode = idx === currentQuestionIdx ? code : (codeCaches[`${idx}_${q.language}`] || q.starterCode);
-  //       const isPassed = result?.passed;
-
-  //       return {
-  //         question: q,
-  //         idx,
-  //         savedCode,
-  //         isPassed,
-  //         testCount: result?.count || '0'
-  //       };
-  //     });
-
-  //     // 2. Save answers to the Spring Boot Backend
-  //     try {
-  //       const savePromises = submissionData.map(data => {
-  //         const payload = {
-  //           token: effectiveUserId,
-  //           questionId: data.question.id || data.question.questionId || (data.idx + 1),
-  //           ans: JSON.stringify({ code: data.savedCode })
-  //         };
-  //         return axios.post(`${EXTERNAL_API_URL}/api/aiinterview/coding/ans/save`, payload);
-  //       });
-
-  //       await Promise.all(savePromises);
-  //       console.log("All coding answers successfully saved to DB.");
-  //     } catch (error) {
-  //       console.error("Failed to save coding answers:", error);
-  //     }
-
-  //     // 3. Generate summary for the AI
-  //     const summary = submissionData.map(data => {
-  //       const codeSnippet = data.savedCode.length > 1000
-  //         ? data.savedCode.substring(0, 1000) + "\n... [Code Truncated for Length]"
-  //         : data.savedCode;
-
-  //       return `Task ${data.idx + 1} (${data.question.title}): ${data.isPassed ? 'PASSED' : 'FAILED'} [${data.testCount} Tests]
-  // Language: ${data.question.language}
-  // Solution:
-  // ${codeSnippet}`;
-  //     }).join('\n---\n');
-
-  //     addMessage('user', `Status Update: I have submitted solutions for ${codingQuestions.length} tasks.`);
-
-  //     // 4. Send instructions to the AI via WebRTC Data Channel
-  //     if (dcRef.current?.readyState === 'open') {
-  //       dcRef.current.send(JSON.stringify({
-  //         type: "conversation.item.create",
-  //         item: {
-  //           type: "message",
-  //           role: "user",
-  //           content: [{
-  //             type: "input_text",
-  //             text: `[SYSTEM NOTIFICATION: CODING SUBMISSION RECEIVED]
-  // Below are my results for the technical challenges:
-
-  // ${summary}
-
-  // AI Interviewer Action:
-  // 1. Briefly acknowledge that I have finished the coding part.
-  // 2. Evaluate my code quality and logic based on the snippets provided.
-  // 3. Decide if I should be SHORTLISTED based on BOTH behavioral and coding performance.
-  // 4. Provide a closing statement and say "INTERVIEW_COMPLETE".`
-  //           }]
-  //         }
-  //       }));
-  //       dcRef.current.send(JSON.stringify({ type: "response.create" }));
-  //     }
-
-  //     // 5. Exit coding mode
-  //     setIsCodingMode(false);
-  //   };
-
   const confirmSubmitCode = async () => {
     setShowSubmitConfirm(false);
 
@@ -1102,7 +1057,10 @@ AI Interviewer Action:
           }]
         }
       }));
-      dcRef.current.send(JSON.stringify({ type: "response.create" }));
+      dcRef.current.send(JSON.stringify({
+        type: "response.create",
+        response: { output_modalities: ["audio"] }
+      }));
     }
 
     // 5. Exit coding mode
