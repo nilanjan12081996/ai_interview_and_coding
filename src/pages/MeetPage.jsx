@@ -249,7 +249,7 @@ const MeetPage = () => {
       } catch (err) {
         console.error("Initial data fetch failed", err);
         if (checkAlreadyCompleted(err)) return;
-        
+
         setErrorMessage("Connection to interview servers failed.");
         setStatus('error');
       }
@@ -276,11 +276,17 @@ const MeetPage = () => {
     return () => clearInterval(timer);
   }, [status, timeLeft, isCodingMode]);
 
+  // const formatTimeLeft = (seconds) => {
+  //   const h = Math.floor(seconds / 3600);
+  //   const m = Math.floor((seconds % 3600) / 60);
+  //   const s = seconds % 60;
+  //   return `${h > 0 ? h + ':' : ''}${m.toString().padStart(2, '0')}:${s.toString().padStart(2, '0')}`;
+  // };
+
   const formatTimeLeft = (seconds) => {
-    const h = Math.floor(seconds / 3600);
-    const m = Math.floor((seconds % 3600) / 60);
+    const m = Math.floor(seconds / 60);
     const s = seconds % 60;
-    return `${h > 0 ? h + ':' : ''}${m.toString().padStart(2, '0')}:${s.toString().padStart(2, '0')}`;
+    return `${m.toString().padStart(2, '0')}:${s.toString().padStart(2, '0')}`;
   };
 
   // Clock Update
@@ -1120,15 +1126,15 @@ AI Interviewer Action:
         <p style={{ color: '#a8c7fa', fontSize: '1.2rem', maxWidth: '500px', margin: '0 auto 30px auto', lineHeight: '1.6' }}>
           You have already successfully completed this interview session. Your responses have been recorded and are being evaluated.
         </p>
-        <button 
-          className="btn-return" 
+        {/* <button
+          className="btn-return"
           onClick={() => window.location.href = '/'}
           style={{ padding: '12px 30px', fontSize: '1.1rem', background: '#4285f4', border: 'none', borderRadius: '8px', color: 'white', cursor: 'pointer', transition: 'background 0.2s', boxShadow: '0 4px 12px rgba(66,133,244,0.3)' }}
           onMouseOver={(e) => e.target.style.background = '#3b78e7'}
           onMouseOut={(e) => e.target.style.background = '#4285f4'}
         >
           Return Home
-        </button>
+        </button> */}
       </div>
     </div>
   );
