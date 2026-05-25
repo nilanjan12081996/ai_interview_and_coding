@@ -576,3 +576,36 @@
   100% { opacity: 1; transform: translateY(0) scale(1); }
 }
 
+/* ══ RUN FIRST ALERT MODAL ══════════════════════ */
+.run-first-alert {
+  border: 2px solid #ea4335 !important;
+  background: linear-gradient(145deg, #2a1515, #202124) !important;
+  box-shadow: 0 0 40px rgba(234, 67, 53, 0.35), 0 10px 30px rgba(0,0,0,0.7) !important;
+  max-width: 480px !important;
+}
+
+.run-first-alert h2 {
+  color: #ea4335 !important;
+  font-size: 1.8rem !important;
+}
+
+.run-first-alert p {
+  color: #c5c5c5 !important;
+  font-size: 1.05rem !important;
+  line-height: 1.7 !important;
+}
+
+.run-first-icon {
+  font-size: 4rem;
+  animation: shake 0.6s cubic-bezier(.36,.07,.19,.97) both;
+  transform-origin: center;
+}
+
+@keyframes shake {
+  10%, 90% { transform: rotate(-5deg); }
+  20%, 80% { transform: rotate(6deg); }
+  30%, 50%, 70% { transform: rotate(-8deg); }
+  40%, 60% { transform: rotate(8deg); }
+  100% { transform: rotate(0deg); }
+}
+

@@ -103,18 +103,46 @@ const MeetPage = () => {
   const [timeLeft, setTimeLeft] = useState(0); // seconds
   const [testResults, setTestResults] = useState([]); // Array of { id, status, input, expected, actual }
   const [showSubmitConfirm, setShowSubmitConfirm] = useState(false);
+  const [showRunFirstAlert, setShowRunFirstAlert] = useState(false); // Alert: must run at least once
+  const [hasRunCode, setHasRunCode] = useState({}); // { questionIdx: true } - tracks if run was done
 
   const codingQuestionsRef = useRef(codingQuestions);
   const currentIdxRef = useRef(currentQuestionIdx);
+  const hasRunCodeRef = useRef(hasRunCode);
+  const codeRef = useRef(code);
+  const codeCachesRef = useRef(codeCaches);
+  const timeLeftRef = useRef(timeLeft);
+  const tasksResultsRef = useRef(tasksResults);
+  const autoSubmitCalledRef = useRef(false); // prevent double auto-submit
+  const timerStartedRef = useRef(false); // track if timer was actually counting down
 
   useEffect(() => {
     codingQuestionsRef.current = codingQuestions;
   }, [codingQuestions]);
 
-
   useEffect(() => {
     currentIdxRef.current = currentQuestionIdx;
   }, [currentQuestionIdx]);
+
+  useEffect(() => {
+    hasRunCodeRef.current = hasRunCode;
+  }, [hasRunCode]);
+
+  useEffect(() => {
+    codeRef.current = code;
+  }, [code]);
+
+  useEffect(() => {
+    codeCachesRef.current = codeCaches;
+  }, [codeCaches]);
+
+  useEffect(() => {
+    timeLeftRef.current = timeLeft;
+  }, [timeLeft]);
+
+  useEffect(() => {
+    tasksResultsRef.current = tasksResults;
+  }, [tasksResults]);
   // Refs for media and logic
   const localStreamRef = useRef(null);
   const screenStreamRef = useRef(null);
@@ -262,12 +290,27 @@ const MeetPage = () => {
 
   // Countdown Timer logic
   useEffect(() => {
-    if (status !== 'interviewing' || timeLeft <= 0) {
-      if (timeLeft <= 0 && status === 'interviewing') {
-        // GLOBAL TIMEOUT: Submit whatever is currently in the editor and end.
-        if (isCodingMode) setShowSubmitConfirm(true);
-        else finishInterview();
+    if (status !== 'interviewing') return;
+
+    // Only trigger timeout logic if timeLeft was actually set (> 0 at some point)
+    // Prevents false-fire when timeLeft is still the default 0 on interview start
+    if (timeLeft > 0) {
+      timerStartedRef.current = true; // timer is running
+    }
+
+    if (timeLeft <= 0) {
+      if (timerStartedRef.current) {
+        // Timer genuinely expired — auto-submit or finish
+        if (isCodingMode) {
+          if (!autoSubmitCalledRef.current) {
+            autoSubmitCalledRef.current = true;
+            confirmSubmitCodeAuto();
+          }
+        } else {
+          finishInterview();
+        }
       }
+      // If timerStartedRef is false, timeLeft is still the default 0 — do nothing
       return;
     }
 
@@ -303,14 +346,49 @@ const MeetPage = () => {
   useEffect(() => {
     if (status !== 'interviewing') return;
 
+    let blurSubmitTimer = null; // grace period timer for tab-switch auto-submit
+
     const handleVisibilityChange = () => {
-      if (document.hidden) triggerViolation("Candidate switched tabs.");
+      if (document.hidden) {
+        if (isCodingMode) {
+          // Give a 3-second grace period — user may have accidentally switched
+          blurSubmitTimer = setTimeout(() => {
+            if (document.hidden && !autoSubmitCalledRef.current) {
+              autoSubmitCalledRef.current = true;
+              confirmSubmitCodeAuto();
+            }
+          }, 3000);
+        } else {
+          triggerViolation("Candidate switched tabs.");
+        }
+      } else {
+        // User came back — cancel the grace period timer
+        if (blurSubmitTimer) {
+          clearTimeout(blurSubmitTimer);
+          blurSubmitTimer = null;
+        }
+      }
     };
+
+    // Window blur: in coding mode, do NOT auto-submit — too many false positives
+    // (Monaco editor autocomplete, browser toolbar, etc. all trigger window blur)
     const handleWindowBlur = () => {
-      triggerViolation("Candidate clicked outside window.");
+      if (!isCodingMode) {
+        triggerViolation("Candidate clicked outside window.");
+      }
+      // In coding mode: no action — visibility change handles real tab-switches
     };
+
     const handleFullscreenChange = () => {
-      if (!document.fullscreenElement && !showWarning) triggerViolation("Exited full-screen.");
+      if (!document.fullscreenElement && !showWarning) {
+        if (isCodingMode) {
+          // Fullscreen exit during coding: just warn, don't auto-submit
+          // User may have accidentally pressed Escape
+          triggerViolation("Exited full-screen during coding round.");
+        } else {
+          triggerViolation("Exited full-screen.");
+        }
+      }
     };
 
     // Updated Proctoring: Allow copy/paste specifically when in coding mode for testing.
@@ -350,8 +428,9 @@ const MeetPage = () => {
       document.removeEventListener("paste", preventAction);
       document.removeEventListener("cut", preventAction);
       document.removeEventListener("keydown", handleKeydown);
+      if (blurSubmitTimer) clearTimeout(blurSubmitTimer);
     };
-  }, [status, showWarning, isCodingMode]); // Re-added isCodingMode to dependencies
+  }, [status, showWarning, isCodingMode]);
 
   // Transcript Syncing
   useEffect(() => {
@@ -536,7 +615,35 @@ const MeetPage = () => {
 
     // Direct OpenAI Session Creation (Ported from start_session in app.py)
     try {
-      const instructions = `You are a professional, warm, and conversational AI technical interviewer.
+      // Build AI instructions based on interview type
+      let instructions;
+
+      if (codingFlag && !behavioralFlag) {
+        // ── CODING-ONLY MODE ─────────────────────────────────────────────
+        instructions = `You are an AI interviewer conducting a coding assessment.
+
+=== STRICT BEHAVIOR ===
+- Speak ONLY in English.
+- Keep everything extremely brief and professional.
+- Do NOT ask any behavioral, HR, or personal questions.
+- Do NOT ask "tell me about yourself", "what are your strengths", or anything similar.
+- Do NOT give long speeches or explanations.
+- After your greeting, stay SILENT and wait. Do not speak again unless the candidate asks you something.
+
+=== YOUR ONLY JOB ===
+STEP 1 — Say this greeting EXACTLY (word for word, nothing more):
+"Hello ${candidateName}, welcome to your coding assessment for the ${jobTitle} role. You have ${codingQuestions.length} coding question${codingQuestions.length > 1 ? 's' : ''} to solve. I have opened the coding editor for you. Please solve the problems there. You can switch between tasks in the sidebar. Good luck!"
+
+STEP 2 — Stay completely silent. Do not talk again unless the candidate asks for help.
+
+STEP 3 — When you receive the system notification that the candidate has submitted, say ONLY:
+"Thank you, ${candidateName}. Your coding exam has been successfully submitted. We will review your solutions and get back to you. Best of luck! INTERVIEW_COMPLETE"
+
+Nothing else. No evaluation. No extra feedback. No questions.
+`;
+      } else {
+        // ── BEHAVIORAL + CODING MODE ─────────────────────────────────────
+        instructions = `You are a professional, warm, and conversational AI technical interviewer.
 You are interviewing ${candidateName} for the role of ${jobTitle}.
 
 === INTERVIEW FLOW ===
@@ -548,7 +655,7 @@ ${questionsRef.current.map((q, i) => `${i + 1}. ${q}`).join('\n')}
    Tasks to mention:
    ${codingQuestions.map((q, i) => `${i + 1}. ${q.title}`).join('\n')}
 
-   - When you are ready for the candidate to write code, say exactly: "I have opened the coding editor for you. Please solve the problems there. You can switch between tasks in the sidebar." 
+   - When you are ready for the candidate to write code, say exactly: "I have opened the coding editor for you. Please solve the problems there. You can switch between tasks in the sidebar."
    - Wait for them to complete the tasks.
 
 3. EVALUATION:
@@ -561,7 +668,9 @@ ${questionsRef.current.map((q, i) => `${i + 1}. ${q}`).join('\n')}
 3. TRANSITION: Move naturally between behavioral and coding sections.
 4. ENDING: After giving feedback on the coding challenge, thank them for their time and say exactly: "INTERVIEW_COMPLETE"
 5. DO NOT read question numbers.
+6. Speak only in English.
 `;
+      }
 
       const tokenRes = await axios.post(`${PROCESS_TEXT_API_URL}/api/openai/realtime-token`, {
         instructions,
@@ -705,7 +814,11 @@ ${questionsRef.current.map((q, i) => `${i + 1}. ${q}`).join('\n')}
         if (finalText) {
           addMessage('ai', finalText);
 
-          if (finalText.includes('INTERVIEW_COMPLETE')) {
+          // Strict INTERVIEW_COMPLETE check — must be the exact signal phrase
+          // Use word boundary match to avoid false triggers from phrases like
+          // "complete the coding task" or "interview is complete"
+          const isInterviewDone = /\bINTERVIEW_COMPLETE\b/.test(finalText);
+          if (isInterviewDone) {
             setTimeout(finishInterview, 2500);
           }
 
@@ -932,7 +1045,103 @@ ${questionsRef.current.map((q, i) => `${i + 1}. ${q}`).join('\n')}
       setConsoleOutput(prev => prev + '\nExecution Failed. ' + (e.response?.data?.error?.message || e.message));
     } finally {
       setIsRunning(false);
+      // Mark this question as having been run at least once
+      setHasRunCode(prev => ({ ...prev, [currentQuestionIdx]: true }));
     }
+  };
+
+  // Auto-submit using refs (safe to call from timers/event handlers outside React render)
+  const confirmSubmitCodeAuto = async () => {
+    const currentCode = codeRef.current;
+    const currentIdx = currentIdxRef.current;
+    const currentCaches = codeCachesRef.current;
+    const currentTimeLeft = timeLeftRef.current;
+    const currentTasksResults = tasksResultsRef.current;
+    const questions = codingQuestionsRef.current;
+
+    setShowSubmitConfirm(false);
+
+    const submissionData = questions.map((q, idx) => {
+      const result = currentTasksResults[idx];
+      const savedCode = idx === currentIdx ? currentCode : (currentCaches[`${idx}_${q.language}`] || q.starterCode);
+      return {
+        question: q,
+        idx,
+        savedCode,
+        isPassed: result?.passed,
+        testCount: result?.count || '0'
+      };
+    });
+
+    try {
+      let accumulatedAnswers = [];
+      let generatedId = null;
+      for (let i = 0; i < submissionData.length; i++) {
+        const data = submissionData[i];
+        const currentAnswerObj = {
+          taskNumber: data.idx + 1,
+          questionDetails: {
+            title: data.question.title,
+            difficulty: data.question.difficulty,
+            problemStatement: data.question.problemStatement || "N/A",
+            constraints: data.question.constraints || [],
+            hints: data.question.hints || []
+          },
+          candidateAnswer: {
+            techStack: data.question.language,
+            submittedCode: data.savedCode
+          },
+          evaluation: {
+            status: data.isPassed ? "PASSED" : "FAILED",
+            testCasesPassed: data.testCount,
+            totalTestCases: data.question.testCases ? data.question.testCases.length : 0,
+            testCasesDetails: data.question.testCases || []
+          },
+          timeData: {
+            timeRemainingSeconds: currentTimeLeft,
+            submittedAt: new Date().toLocaleString()
+          }
+        };
+        accumulatedAnswers.push(currentAnswerObj);
+        const payload = {
+          token: effectiveUserId,
+          questionId: data.question.id || data.question.questionId || (data.idx + 1),
+          ans: JSON.stringify(accumulatedAnswers, null, 2)
+        };
+        if (generatedId) payload.id = generatedId;
+        const response = await axios.post(`${EXTERNAL_API_URL}/api/aiinterview/coding/ans/save`, payload);
+        if (i === 0) generatedId = response.data?.data?.id;
+      }
+      console.log("Auto-submit: All coding answers saved.");
+    } catch (error) {
+      console.error("Auto-submit failed to save answers:", error);
+    }
+
+    const summary = submissionData.map(data => {
+      const codeSnippet = data.savedCode.length > 1000
+        ? data.savedCode.substring(0, 1000) + "\n... [Code Truncated for Length]"
+        : data.savedCode;
+      return `Task ${data.idx + 1} (${data.question.title}): ${data.isPassed ? 'PASSED' : 'FAILED'} [${data.testCount} Tests]\nLanguage: ${data.question.language}\nSolution:\n${codeSnippet}`;
+    }).join('\n---\n');
+
+    if (dcRef.current?.readyState === 'open') {
+      dcRef.current.send(JSON.stringify({
+        type: "conversation.item.create",
+        item: {
+          type: "message", role: "user",
+          content: [{ type: "input_text", text: `[SYSTEM NOTIFICATION: CODING ROUND AUTO-SUBMITTED]
+The candidate's time expired or the session was interrupted. Their code has been saved automatically.
+
+AI Interviewer Action:
+- Say ONLY this message, word for word:
+  "Thank you, ${candidateName}. Your coding exam has been automatically submitted as your time has ended. We will review your solutions and get back to you. Best of luck! INTERVIEW_COMPLETE"
+- Do NOT evaluate. Do NOT ask questions. Just say the message above.` }]
+        }
+      }));
+      dcRef.current.send(JSON.stringify({ type: "response.create", response: { output_modalities: ["audio"] } }));
+    }
+
+    setIsCodingMode(false);
   };
 
   const confirmSubmitCode = async () => {
@@ -1033,7 +1242,7 @@ Solution:
 ${codeSnippet}`;
     }).join('\n---\n');
 
-    addMessage('user', `Status Update: I have submitted solutions for ${codingQuestions.length} tasks.`);
+    addMessage('user', `Status Update: I have submitted my coding solutions.`);
 
     // 4. Send instructions to the AI via WebRTC Data Channel
     if (dcRef.current?.readyState === 'open') {
@@ -1045,15 +1254,12 @@ ${codeSnippet}`;
           content: [{
             type: "input_text",
             text: `[SYSTEM NOTIFICATION: CODING SUBMISSION RECEIVED]
-Below are my results for the technical challenges:
-
-${summary}
+The candidate has submitted all their coding solutions.
 
 AI Interviewer Action:
-1. Briefly acknowledge that I have finished the coding part.
-2. Evaluate my code quality and logic based on the snippets provided.
-3. Decide if I should be SHORTLISTED based on BOTH behavioral and coding performance.
-4. Provide a closing statement and say "INTERVIEW_COMPLETE".`
+- Say ONLY this message, word for word, nothing more:
+  "Thank you, ${candidateName}. Your coding exam has been successfully submitted. We will review your solutions and get back to you. Best of luck! INTERVIEW_COMPLETE"
+- Do NOT evaluate the code. Do NOT give feedback. Do NOT ask questions. Just say the message above.`
           }]
         }
       }));
@@ -1115,6 +1321,29 @@ AI Interviewer Action:
 
   return (
     <div className="meet-fullscreen-wrapper">
+      {/* --- Run First Alert Modal --- */}
+      {showRunFirstAlert && (
+        <div className="submit-confirm-overlay">
+          <div className="submit-confirm-box run-first-alert">
+            <div className="run-first-icon">🚫</div>
+            <h2 style={{ color: '#ea4335' }}>Code Not Tested Yet!</h2>
+            <p>
+              You must click the <strong>▶ Run</strong> button at least once to test your code before submitting.
+              <br /><br />
+              This is required by the system — no submission will be accepted without running the code first.
+            </p>
+            <div className="submit-confirm-actions">
+              <button
+                className="btn-confirm"
+                style={{ background: 'linear-gradient(135deg, #4285f4, #1a73e8)', minWidth: 160 }}
+                onClick={() => setShowRunFirstAlert(false)}
+              >
+                Got it — Let me Run first!
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
       {/* --- Submit Confirmation Popup  --- */}
       {showSubmitConfirm && (
         <div className="submit-confirm-overlay">
@@ -1213,7 +1442,18 @@ AI Interviewer Action:
                         <Send size={16} />
                         Submit
                       </button> */}
-                      <button className="submit-btn" onClick={() => setShowSubmitConfirm(true)}>
+                      <button
+                        className="submit-btn"
+                        onClick={() => {
+                          // Block submit if no run has been done for ANY question
+                          const anyRunDone = codingQuestions.some((_, idx) => hasRunCodeRef.current[idx]);
+                          if (!anyRunDone) {
+                            setShowRunFirstAlert(true);
+                          } else {
+                            setShowSubmitConfirm(true);
+                          }
+                        }}
+                      >
                         <Send size={16} />
                         Submit
                       </button>
