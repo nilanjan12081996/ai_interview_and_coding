@@ -67,6 +67,9 @@ const MeetPage = () => {
   const [currentTime, setCurrentTime] = useState(new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }));
   const [isUploading, setIsUploading] = useState(true);
   const [isCodingRoundEnabled, setIsCodingRoundEnabled] = useState(true);
+  const [isBehavioralRoundEnabled, setIsBehavioralRoundEnabled] = useState(true);
+  const isBehavioralRoundEnabledRef = useRef(true);
+  const isCodingRoundEnabledRef = useRef(true);
 
 
   // Coding Mode State
@@ -763,6 +766,10 @@ const MeetPage = () => {
     let codingFlag = true;
     let behavioralFlag = true;
 
+    // Set initial ref values
+    isCodingRoundEnabledRef.current = true;
+    isBehavioralRoundEnabledRef.current = true;
+
     try {
       const typeResponse = await axios.get(`${EXTERNAL_API_URL}/api/goodmood/interview/get/token/interview/type?token=${effectiveUserId}`);
       console.log("Interview Type Response:", typeResponse.data);
@@ -772,6 +779,9 @@ const MeetPage = () => {
         codingFlag = typeData.coding === 1;
         behavioralFlag = typeData.interviewChecking === 1;
         setIsCodingRoundEnabled(codingFlag);
+        isCodingRoundEnabledRef.current = codingFlag;
+        setIsBehavioralRoundEnabled(behavioralFlag);
+        isBehavioralRoundEnabledRef.current = behavioralFlag;
       }
 
     } catch (error) {
@@ -804,19 +814,50 @@ const MeetPage = () => {
       alert(err.message); return;
     }
 
+    // logics for interview type as per === 1 (Coding-only bypass)
+    if (codingFlag && !behavioralFlag) {
+      setIsCodingMode(true);
+      setIsMicDisabled(true);
+      setIsSpeakerMuted(true);
+
+      // Play intro sound
+      const audio = new Audio('/coding_intro.m4a');
+      audio.play().catch(e => console.error("Failed to play intro audio:", e));
+
+      requestFullScreen();
+      setStatus('interviewing');
+      startTimeRef.current = Date.now();
+      resetRealtimeCostTracking();
+
+      // Use PUT instead of POST for completion as per app.py
+      axios.put(`${EXTERNAL_API_URL}/api/goodmood/question/complete/${effectiveUserId}`).catch(() => { });
+
+      // Audio Setup for Recording
+      audioCtxRef.current = new (window.AudioContext || window.webkitAudioContext)();
+      audioDestRef.current = audioCtxRef.current.createMediaStreamDestination();
+      localAudioSourceRef.current = audioCtxRef.current.createMediaStreamSource(localStreamRef.current);
+      localAudioSourceRef.current.connect(audioDestRef.current);
+
+      // Media Recorder
+      const combinedStream = new MediaStream([
+        ...screenStreamRef.current.getVideoTracks(),
+        ...audioDestRef.current.stream.getAudioTracks()
+      ]);
+      mediaRecorderRef.current = new MediaRecorder(combinedStream, { mimeType: 'video/webm' });
+      mediaRecorderRef.current.ondataavailable = (e) => {
+        if (e.data.size > 0) uploadChunk(e.data);
+      };
+      mediaRecorderRef.current.onstop = () => checkUploads();
+      mediaRecorderRef.current.start(10000);
+
+      return; // Early return to bypass WebRTC connection
+    }
+
     requestFullScreen();
     setStatus('interviewing');
     setIsCodingMode(false);
     startTimeRef.current = Date.now();
     resetRealtimeCostTracking();
-
-    // logics for interview type as per === 1
-    if (codingFlag && !behavioralFlag) {
-      setIsCodingMode(true);
-      setIsMicDisabled(true);
-    } else {
-      setIsCodingMode(false);
-    }
 
     // Use PUT instead of POST for completion as per app.py
     axios.put(`${EXTERNAL_API_URL}/api/goodmood/question/complete/${effectiveUserId}`).catch(() => { });
@@ -839,6 +880,7 @@ const MeetPage = () => {
     };
     mediaRecorderRef.current.onstop = () => checkUploads();
     mediaRecorderRef.current.start(10000);
+
 
     // Direct OpenAI Session Creation (Ported from start_session in app.py)
     try {
@@ -1115,6 +1157,10 @@ ${questionsRef.current.map((q, i) => `${i + 1}. ${q}`).join('\n')}
                 setIsCodingMode(true);
                 setIsMicDisabled(true);
                 setIsSpeakerMuted(true);
+
+                // Play intro sound
+                const audio = new Audio('/coding_intro.m4a');
+                audio.play().catch(e => console.error("Failed to play intro audio:", e));
               }
             }
           }
@@ -1421,7 +1467,17 @@ ${questionsRef.current.map((q, i) => `${i + 1}. ${q}`).join('\n')}
     }).join('\n---\n');
 
     setIsMicDisabled(true);
-    setIsSpeakerMuted(false);
+    setIsSpeakerMuted(true);
+
+    // Play end sound
+    const audio = new Audio('/coding_end.m4a');
+    audio.play().catch(e => console.error("Failed to play end audio:", e));
+
+    if (isCodingRoundEnabledRef.current && !isBehavioralRoundEnabledRef.current) {
+      finishInterview();
+      return;
+    }
+
     if (dcRef.current?.readyState === 'open') {
       dcRef.current.send(JSON.stringify({
         type: "conversation.item.create",
@@ -1544,7 +1600,17 @@ ${codeSnippet}`;
 
     // 4. Send instructions to the AI via WebRTC Data Channel
     setIsMicDisabled(true);
-    setIsSpeakerMuted(false);
+    setIsSpeakerMuted(true);
+
+    // Play end sound
+    const audio = new Audio('/coding_end.m4a');
+    audio.play().catch(e => console.error("Failed to play end audio:", e));
+
+    if (isCodingRoundEnabledRef.current && !isBehavioralRoundEnabledRef.current) {
+      finishInterview();
+      return;
+    }
+
     if (dcRef.current?.readyState === 'open') {
       dcRef.current.send(JSON.stringify({
         type: "conversation.item.create",
@@ -1975,6 +2041,10 @@ AI Interviewer Action:
                 <button
                   className={`meet-btn ${isCodingMode ? 'active' : ''}`}
                   onClick={() => {
+                    if (isCodingRoundEnabledRef.current && !isBehavioralRoundEnabledRef.current) {
+                      // Prevent toggling out of coding mode if it's coding-only
+                      return;
+                    }
                     const nextMode = !isCodingMode;
                     setIsCodingMode(nextMode);
                     if (!nextMode) {
