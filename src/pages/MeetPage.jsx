@@ -60,6 +60,7 @@ const MeetPage = () => {
   const [isScreenSharing, setIsScreenSharing] = useState(true);
   const [messages, setMessages] = useState([]);
   const [isAiTalking, setIsAiTalking] = useState(false);
+  const [isAiThinking, setIsAiThinking] = useState(false);
   const [warningCount, setWarningCount] = useState(0);
   const [showWarning, setShowWarning] = useState(false);
   const [warningReason, setWarningReason] = useState('');
@@ -90,6 +91,69 @@ const MeetPage = () => {
   };
 
   const [isCodingMode, setIsCodingMode] = useState(false);
+  const [isMicDisabled, setIsMicDisabled] = useState(false);
+  const [isSpeakerMuted, setIsSpeakerMuted] = useState(false);
+  const [isUserTalking, setIsUserTalking] = useState(false);
+
+  useEffect(() => {
+    if (localStreamRef.current) {
+      localStreamRef.current.getAudioTracks().forEach(t => {
+        t.enabled = isMicDisabled ? false : !isMicMuted;
+      });
+    }
+  }, [isMicDisabled, isMicMuted]);
+
+  useEffect(() => {
+    if (isUserTalking && convoRef.current) {
+      convoRef.current.scrollTop = convoRef.current.scrollHeight;
+    }
+  }, [isUserTalking]);
+
+  useEffect(() => {
+    if (status !== 'interviewing') return;
+
+    let animationFrameId;
+    const checkVolume = () => {
+      let isSpeaking = false;
+      if (aiAnalyserRef.current) {
+        const array = new Uint8Array(aiAnalyserRef.current.frequencyBinCount);
+        aiAnalyserRef.current.getByteFrequencyData(array);
+        
+        let sum = 0;
+        for (let i = 0; i < array.length; i++) {
+          sum += array[i];
+        }
+        const average = sum / array.length;
+        
+        // If average volume is above a threshold, AI is speaking
+        isSpeaking = average > 4;
+        setIsAiTalking(isSpeaking);
+      }
+
+      if (isFinalizingRef.current) {
+        if (!isSpeaking) {
+          silenceCounterRef.current += 1;
+          // 90 frames of silence (at ~60fps) is roughly 1.5 seconds of clean silence
+          if (silenceCounterRef.current > 90) {
+            isFinalizingRef.current = false;
+            finishInterview();
+          }
+        } else {
+          silenceCounterRef.current = 0;
+        }
+      }
+
+      animationFrameId = requestAnimationFrame(checkVolume);
+    };
+
+    animationFrameId = requestAnimationFrame(checkVolume);
+    return () => {
+      if (animationFrameId) {
+        cancelAnimationFrame(animationFrameId);
+      }
+    };
+  }, [status]);
+
   const [codingQuestions, setCodingQuestions] = useState(staticQuestions);
   const [currentQuestionIdx, setCurrentQuestionIdx] = useState(0);
   const [code, setCode] = useState(staticQuestions[0].starterCode);
@@ -153,6 +217,9 @@ const MeetPage = () => {
   const audioDestRef = useRef(null);
   const localAudioSourceRef = useRef(null);
   const remoteAudioSourceRef = useRef(null);
+  const aiAnalyserRef = useRef(null);
+  const isFinalizingRef = useRef(false);
+  const silenceCounterRef = useRef(0);
   const videoRef = useRef(null);
   const audioElRef = useRef(null);
   const convoRef = useRef(null);
@@ -587,6 +654,7 @@ const MeetPage = () => {
     // logics for interview type as per === 1
     if (codingFlag && !behavioralFlag) {
       setIsCodingMode(true);
+      setIsMicDisabled(true);
     } else {
       setIsCodingMode(false);
     }
@@ -640,6 +708,22 @@ STEP 3 — When you receive the system notification that the candidate has submi
 "Thank you, ${candidateName}. Your coding exam has been successfully submitted. We will review your solutions and get back to you. Best of luck! INTERVIEW_COMPLETE"
 
 Nothing else. No evaluation. No extra feedback. No questions.
+`;
+      } else if (!codingFlag && behavioralFlag) {
+        // ── BEHAVIORAL-ONLY MODE ─────────────────────────────────────────
+        instructions = `You are a professional, warm, and conversational AI technical interviewer.
+You are interviewing ${candidateName} for the role of ${jobTitle}.
+
+=== INTERVIEW FLOW ===
+1. BEHAVIORAL: Ask the following questions sequentially:
+${questionsRef.current.map((q, i) => `${i + 1}. ${q}`).join('\n')}
+
+=== YOUR BEHAVIOR RULES ===
+1. GREETING: Greet ${candidateName} warmly. Mention the role (${jobTitle}). Then ask the first behavioral question.
+2. LISTENING: After each answer, evaluate if it was clear. Ask follow-ups if needed.
+3. ENDING: After the candidate answers the final question ("Do you have any questions for us?"), thank them warmly for their time and say exactly: "INTERVIEW_COMPLETE"
+4. DO NOT read question numbers.
+5. Speak only in English.
 `;
       } else {
         // ── BEHAVIORAL + CODING MODE ─────────────────────────────────────
@@ -729,12 +813,22 @@ ${questionsRef.current.map((q, i) => `${i + 1}. ${q}`).join('\n')}
 
         // Mix remote AI audio into the recorded screen recording audio track.
         try {
-          if (audioCtxRef.current && audioDestRef.current && e.streams[0]) {
-            remoteAudioSourceRef.current = audioCtxRef.current.createMediaStreamSource(e.streams[0]);
-            remoteAudioSourceRef.current.connect(audioDestRef.current);
+          if (audioCtxRef.current && e.streams[0]) {
+            const source = audioCtxRef.current.createMediaStreamSource(e.streams[0]);
+            remoteAudioSourceRef.current = source;
+            
+            if (audioDestRef.current) {
+              source.connect(audioDestRef.current);
+            }
+
+            // Setup Analyser
+            const analyser = audioCtxRef.current.createAnalyser();
+            analyser.fftSize = 64;
+            source.connect(analyser);
+            aiAnalyserRef.current = analyser;
           }
         } catch (err) {
-          console.warn("Could not mix AI audio into recording:", err);
+          console.warn("Could not mix AI audio into recording & setup analyser:", err);
         }
       }
     };
@@ -796,7 +890,9 @@ ${questionsRef.current.map((q, i) => `${i + 1}. ${q}`).join('\n')}
         break;
 
       case 'response.created':
-        setIsAiTalking(true);
+        setIsAiThinking(true);
+        setIsAiTalking(false);
+        setIsUserTalking(false);
         break;
 
       case 'response.output_audio_transcript.delta':
@@ -804,6 +900,7 @@ ${questionsRef.current.map((q, i) => `${i + 1}. ${q}`).join('\n')}
       case 'response.output_text.delta':
         aiBufferRef.current += evt.delta || '';
         setIsAiTalking(true);
+        setIsAiThinking(false);
         break;
 
       case 'response.output_audio_transcript.done':
@@ -819,25 +916,36 @@ ${questionsRef.current.map((q, i) => `${i + 1}. ${q}`).join('\n')}
           // "complete the coding task" or "interview is complete"
           const isInterviewDone = /\bINTERVIEW_COMPLETE\b/.test(finalText);
           if (isInterviewDone) {
-            setTimeout(finishInterview, 2500);
+            isFinalizingRef.current = true;
+            setTimeout(() => {
+              if (isFinalizingRef.current) {
+                isFinalizingRef.current = false;
+                finishInterview();
+              }
+            }, 12000); // 12-second safety timeout
           }
 
-          const lowerText = finalText.toLowerCase();
-          if (
-            lowerText.includes('opened the coding editor') ||
-            lowerText.includes('coding task') ||
-            lowerText.includes('write a function') ||
-            lowerText.includes('solve the problems')
-          ) {
-            const qs = codingQuestionsRef.current;
-            const idx = currentIdxRef.current;
+          if (isCodingRoundEnabled) {
+            const lowerText = finalText.toLowerCase();
+            if (
+              lowerText.includes('welcome to your coding assessment') ||
+              lowerText.includes('opened the coding editor') ||
+              lowerText.includes('coding task') ||
+              lowerText.includes('write a function') ||
+              lowerText.includes('solve the problems')
+            ) {
+              const qs = codingQuestionsRef.current;
+              const idx = currentIdxRef.current;
 
-            if (qs[idx]) {
-              console.log("Triggering Coding Mode with active task:", qs[idx].title);
-              setCodingTask(qs[idx].problemStatement);
-              setLanguage(qs[idx].language);
-              setCode(qs[idx].starterCode);
-              setIsCodingMode(true);
+              if (qs[idx]) {
+                console.log("Triggering Coding Mode with active task:", qs[idx].title);
+                setCodingTask(qs[idx].problemStatement);
+                setLanguage(qs[idx].language);
+                setCode(qs[idx].starterCode);
+                setIsCodingMode(true);
+                setIsMicDisabled(true);
+                setIsSpeakerMuted(true);
+              }
             }
           }
         }
@@ -850,16 +958,24 @@ ${questionsRef.current.map((q, i) => `${i + 1}. ${q}`).join('\n')}
       case 'input_audio_transcription.completed': {
         const transcript = (evt.transcript || evt.item?.content?.[0]?.transcript || '').trim();
         if (transcript) addMessage('user', transcript);
+        setIsUserTalking(false);
         break;
       }
 
       case 'input_audio_buffer.speech_started':
         // Candidate started speaking; AI can be interrupted by server VAD.
+        setIsAiThinking(false);
+        setIsUserTalking(true);
         break;
 
       case 'input_audio_buffer.speech_stopped':
+        setIsAiThinking(true);
+        setIsAiTalking(false);
+        break;
+
       case 'response.done':
         setIsAiTalking(false);
+        setIsAiThinking(false);
         break;
 
       case 'error':
@@ -1124,6 +1240,8 @@ ${questionsRef.current.map((q, i) => `${i + 1}. ${q}`).join('\n')}
       return `Task ${data.idx + 1} (${data.question.title}): ${data.isPassed ? 'PASSED' : 'FAILED'} [${data.testCount} Tests]\nLanguage: ${data.question.language}\nSolution:\n${codeSnippet}`;
     }).join('\n---\n');
 
+    setIsMicDisabled(true);
+    setIsSpeakerMuted(false);
     if (dcRef.current?.readyState === 'open') {
       dcRef.current.send(JSON.stringify({
         type: "conversation.item.create",
@@ -1245,6 +1363,8 @@ ${codeSnippet}`;
     addMessage('user', `Status Update: I have submitted my coding solutions.`);
 
     // 4. Send instructions to the AI via WebRTC Data Channel
+    setIsMicDisabled(true);
+    setIsSpeakerMuted(false);
     if (dcRef.current?.readyState === 'open') {
       dcRef.current.send(JSON.stringify({
         type: "conversation.item.create",
@@ -1545,25 +1665,50 @@ AI Interviewer Action:
                   </div>
                   {/* Floating AI Video during coding */}
                   <div className="ai-floating-pip">
-                    <div className={`ai-avatar-wrapper small ${isAiTalking ? 'ai-talking' : ''}`}>
+                    <div className={`ai-avatar-wrapper small ${isAiTalking ? 'ai-talking' : ''} ${isAiThinking ? 'ai-thinking' : ''}`}>
                       <div className="ai-ring" />
                       <div className="ai-avatar" style={{ width: 60, height: 60, fontSize: '1.5rem' }}>🤖</div>
                     </div>
+                    {isAiThinking && <div className="thinking-bubble">Thinking...</div>}
                   </div>
                 </div>
               ) : (
                 <>
+                  <video ref={videoRef} className="full-stage-video" autoPlay muted playsInline />
                   <div className="video-status"><span>●</span> REC</div>
-                  <div className={`ai-avatar-wrapper ${isAiTalking ? 'ai-talking' : ''}`}>
-                    <div className="ai-ring" />
-                    <div className="ai-avatar">🤖</div>
+                  <div className="interview-fold-floating-container">
+                    <div className="pip-header">
+                      {isAiThinking ? (
+                        <span className="pip-thinking-tag">Thinking...</span>
+                      ) : (
+                        <span />
+                      )}
+                      <Mic size={16} className="pip-mic-icon" />
+                    </div>
+
+                    <div className={`waveform ${isAiTalking || isAiThinking ? 'active' : ''}`}>
+                      <span className="bar"></span>
+                      <span className="bar"></span>
+                      <span className="bar"></span>
+                      <span className="bar"></span>
+                      <span className="bar"></span>
+                      <span className="bar"></span>
+                      <span className="bar"></span>
+                      <span className="bar"></span>
+                      <span className="bar"></span>
+                      <span className="bar"></span>
+                      <span className="bar"></span>
+                    </div>
+
+                    <div className="interview-fold-logo">InterviewFold</div>
                   </div>
-                  <div className="video-badge">AI Interviewer</div>
                 </>
               )}
-              <div className="self-video-container">
-                <video ref={videoRef} autoPlay muted playsInline />
-              </div>
+              {isCodingMode && (
+                <div className="self-video-container">
+                  <video ref={videoRef} autoPlay muted playsInline />
+                </div>
+              )}
             </div>
 
             {!isCodingMode && (
@@ -1581,14 +1726,34 @@ AI Interviewer Action:
                 </div>
                 <div className="convo" ref={convoRef}>
                   {messages.map((m, i) => (
-                    <div key={i} className="meet-msg">
-                      <div className="meet-msg-header">
-                        <span className={`meet-msg-who ${m.who}`}>{m.who === 'ai' ? 'AI Interviewer' : 'You'}</span>
-                        <span className="meet-msg-time">{m.time}</span>
+                    <div key={i} className={`chat-bubble-wrapper ${m.who}`}>
+                      <div className="chat-bubble-header">
+                        <span className="chat-bubble-who">
+                          {m.who === 'ai' ? 'Reed Stone - AI Interviewer' : candidateName}
+                        </span>
+                        <span className="chat-bubble-time">{m.time}</span>
                       </div>
-                      <div className="meet-msg-text">{m.text}</div>
+                      <div className="chat-bubble-body">
+                        {m.text}
+                      </div>
                     </div>
                   ))}
+
+                  {isUserTalking && (
+                    <div className="chat-bubble-wrapper user typing">
+                      <div className="chat-bubble-header">
+                        <span className="chat-bubble-who">{candidateName}</span>
+                        <span className="chat-bubble-time">Speaking...</span>
+                      </div>
+                      <div className="chat-bubble-body user-typing-bubble">
+                        <div className="typing-dots-bubble">
+                          <span></span>
+                          <span></span>
+                          <span></span>
+                        </div>
+                      </div>
+                    </div>
+                  )}
                 </div>
                 <div className="chat-input-area">
                   <div className="chat-fake-input">
@@ -1605,10 +1770,12 @@ AI Interviewer Action:
             </div>
             <div className="bottom-center">
               <button
-                className={`meet-btn ${isMicMuted ? 'danger' : ''}`}
-                onClick={toggleMic}
+                className={`meet-btn ${isMicMuted || isMicDisabled ? 'danger' : ''}`}
+                onClick={isMicDisabled ? null : toggleMic}
+                disabled={isMicDisabled}
+                style={isMicDisabled ? { opacity: 0.5, cursor: 'not-allowed' } : {}}
               >
-                {isMicMuted ? <MicOff size={22} /> : <Mic size={22} />}
+                {isMicMuted || isMicDisabled ? <MicOff size={22} /> : <Mic size={22} />}
               </button>
               <button
                 className={`meet-btn ${!isCameraActive ? 'danger' : ''}`}
@@ -1627,7 +1794,17 @@ AI Interviewer Action:
               {isCodingRoundEnabled && (
                 <button
                   className={`meet-btn ${isCodingMode ? 'active' : ''}`}
-                  onClick={() => setIsCodingMode(!isCodingMode)}
+                  onClick={() => {
+                    const nextMode = !isCodingMode;
+                    setIsCodingMode(nextMode);
+                    if (!nextMode) {
+                      setIsMicDisabled(false);
+                      setIsSpeakerMuted(false);
+                    } else {
+                      setIsMicDisabled(true);
+                      setIsSpeakerMuted(true);
+                    }
+                  }}
                   title="Toggle Coding Editor (Test Mode)"
                 >
                   <Code size={20} />
@@ -1638,7 +1815,7 @@ AI Interviewer Action:
               <MessageSquare size={24} color="#8ab4f8" style={{ cursor: 'pointer' }} />
             </div>
           </div>
-          <audio ref={audioElRef} autoPlay style={{ display: 'none' }} />
+          <audio ref={audioElRef} autoPlay style={{ display: 'none' }} muted={isSpeakerMuted} />
         </div>
       )}
     </div>
