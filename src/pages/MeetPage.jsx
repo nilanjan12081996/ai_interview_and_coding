@@ -115,6 +115,11 @@ const MeetPage = () => {
     let animationFrameId;
     const checkVolume = () => {
       let isSpeaking = false;
+      const now = Date.now();
+      const last = realtimeLastMeterAtRef.current || now;
+      const deltaMs = Math.max(now - last, 0);
+      realtimeLastMeterAtRef.current = now;
+
       if (aiAnalyserRef.current) {
         const array = new Uint8Array(aiAnalyserRef.current.frequencyBinCount);
         aiAnalyserRef.current.getByteFrequencyData(array);
@@ -127,6 +132,9 @@ const MeetPage = () => {
         
         // If average volume is above a threshold, AI is speaking
         isSpeaking = average > 4;
+        if (isSpeaking) {
+          realtimeAiAudioMsRef.current += deltaMs;
+        }
         setIsAiTalking(isSpeaking);
       }
 
@@ -230,6 +238,29 @@ const MeetPage = () => {
   const questionsRef = useRef([]);
   const aiBufferRef = useRef('');
   const userBufferRef = useRef('');
+
+  // Realtime cost tracking
+  const realtimeStartedAtRef = useRef(null);
+  const realtimeEndedAtRef = useRef(null);
+  const realtimeEventCountRef = useRef(0);
+  const realtimeUsageEventsRef = useRef([]);
+  const realtimeUsageRef = useRef({
+    text_input_tokens: 0,
+    text_output_tokens: 0,
+    audio_input_tokens: 0,
+    audio_output_tokens: 0,
+    cached_input_tokens: 0
+  });
+  const realtimeCandidateAudioMsRef = useRef(0);
+  const realtimeCandidateSpeechStartedAtRef = useRef(null);
+  const realtimeAiAudioMsRef = useRef(0);
+  const realtimeLastMeterAtRef = useRef(null);
+  const realtimeCostFinalizedRef = useRef(false);
+  const realtimeSessionMetaRef = useRef({
+    model: 'gpt-realtime-2',
+    voice: 'cedar',
+    transcription_model: 'gpt-4o-transcribe'
+  });
 
   useEffect(() => {
     if (videoRef.current && localStreamRef.current) {
@@ -524,6 +555,133 @@ const MeetPage = () => {
     return `${m}m ${s}s`;
   };
 
+  const getInterviewLinkForCost = () => {
+    return `https://interviewfoldfrontend.interviewfold.com/${effectiveUserId}`;
+  };
+
+  const resetRealtimeCostTracking = () => {
+    realtimeStartedAtRef.current = new Date().toISOString();
+    realtimeEndedAtRef.current = null;
+    realtimeEventCountRef.current = 0;
+    realtimeUsageEventsRef.current = [];
+    realtimeUsageRef.current = {
+      text_input_tokens: 0,
+      text_output_tokens: 0,
+      audio_input_tokens: 0,
+      audio_output_tokens: 0,
+      cached_input_tokens: 0
+    };
+    realtimeCandidateAudioMsRef.current = 0;
+    realtimeCandidateSpeechStartedAtRef.current = null;
+    realtimeAiAudioMsRef.current = 0;
+    realtimeLastMeterAtRef.current = null;
+    realtimeCostFinalizedRef.current = false;
+  };
+
+  const addNumber = (value) => {
+    const n = Number(value);
+    return Number.isFinite(n) && n > 0 ? n : 0;
+  };
+
+  const addRealtimeUsage = (targetKey, value) => {
+    const amount = addNumber(value);
+    if (amount <= 0) return;
+    realtimeUsageRef.current[targetKey] = (realtimeUsageRef.current[targetKey] || 0) + amount;
+  };
+
+  const captureRealtimeUsageFromEvent = (evt) => {
+    realtimeEventCountRef.current += 1;
+
+    const usage = evt?.response?.usage || evt?.usage;
+    if (!usage || typeof usage !== 'object') return;
+
+    realtimeUsageEventsRef.current.push({
+      type: evt.type,
+      usage,
+      capturedAt: new Date().toISOString()
+    });
+    if (realtimeUsageEventsRef.current.length > 20) {
+      realtimeUsageEventsRef.current = realtimeUsageEventsRef.current.slice(-20);
+    }
+
+    // Realtime usage payloads can vary by model/version, so this parser supports
+    // both flat token fields and nested input/output token details.
+    addRealtimeUsage('text_input_tokens', usage.input_text_tokens);
+    addRealtimeUsage('text_output_tokens', usage.output_text_tokens);
+    addRealtimeUsage('audio_input_tokens', usage.input_audio_tokens);
+    addRealtimeUsage('audio_output_tokens', usage.output_audio_tokens);
+    addRealtimeUsage('cached_input_tokens', usage.cached_input_tokens);
+
+    addRealtimeUsage('text_input_tokens', usage.input_token_details?.text_tokens);
+    addRealtimeUsage('audio_input_tokens', usage.input_token_details?.audio_tokens);
+    addRealtimeUsage('cached_input_tokens', usage.input_token_details?.cached_tokens);
+    addRealtimeUsage('text_output_tokens', usage.output_token_details?.text_tokens);
+    addRealtimeUsage('audio_output_tokens', usage.output_token_details?.audio_tokens);
+
+    // Fallback for generic usage objects.
+    if (
+      !usage.input_text_tokens &&
+      !usage.input_audio_tokens &&
+      !usage.input_token_details &&
+      usage.input_tokens
+    ) {
+      addRealtimeUsage('text_input_tokens', usage.input_tokens);
+    }
+
+    if (
+      !usage.output_text_tokens &&
+      !usage.output_audio_tokens &&
+      !usage.output_token_details &&
+      usage.output_tokens
+    ) {
+      addRealtimeUsage('text_output_tokens', usage.output_tokens);
+    }
+  };
+
+  const finalizeRealtimeCost = async () => {
+    if (realtimeCostFinalizedRef.current || !effectiveUserId || !realtimeStartedAtRef.current) return;
+    realtimeCostFinalizedRef.current = true;
+
+    const now = new Date();
+    realtimeEndedAtRef.current = now.toISOString();
+
+    if (realtimeCandidateSpeechStartedAtRef.current) {
+      realtimeCandidateAudioMsRef.current += Date.now() - realtimeCandidateSpeechStartedAtRef.current;
+      realtimeCandidateSpeechStartedAtRef.current = null;
+    }
+
+    const durationSeconds = Math.max(
+      Math.round((Date.now() - startTimeRef.current) / 1000),
+      0
+    );
+
+    const payload = {
+      token: effectiveUserId,
+      interview_link: getInterviewLinkForCost(),
+      model: realtimeSessionMetaRef.current.model,
+      voice: realtimeSessionMetaRef.current.voice,
+      transcription_model: realtimeSessionMetaRef.current.transcription_model,
+      started_at: realtimeStartedAtRef.current,
+      ended_at: realtimeEndedAtRef.current,
+      duration_seconds: durationSeconds,
+      candidate_audio_seconds: Number((realtimeCandidateAudioMsRef.current / 1000).toFixed(2)),
+      ai_audio_seconds: Number((realtimeAiAudioMsRef.current / 1000).toFixed(2)),
+      usage: realtimeUsageRef.current,
+      usage_source: 'frontend_realtime_events_or_duration_estimate',
+      event_count: realtimeEventCountRef.current,
+      message_count: messages.length,
+      raw_usage_events: realtimeUsageEventsRef.current
+    };
+
+    try {
+      const res = await axios.post(`${PROCESS_TEXT_API_URL}/api/v1/realtime-cost/finalize`, payload);
+      console.log('Realtime cost saved:', res.data);
+    } catch (error) {
+      console.error('Failed to save realtime cost:', error);
+      realtimeCostFinalizedRef.current = false;
+    }
+  };
+
   const syncTranscripts = async (transcriptText) => {
     // 1. External Transcript API
     axios.post(`${EXTERNAL_API_URL}/transcript/ai`, { token: effectiveUserId, transcript: transcriptText }).catch(() => { });
@@ -650,6 +808,7 @@ const MeetPage = () => {
     setStatus('interviewing');
     setIsCodingMode(false);
     startTimeRef.current = Date.now();
+    resetRealtimeCostTracking();
 
     // logics for interview type as per === 1
     if (codingFlag && !behavioralFlag) {
@@ -756,13 +915,23 @@ ${questionsRef.current.map((q, i) => `${i + 1}. ${q}`).join('\n')}
 `;
       }
 
+      const realtimeModel = "gpt-realtime-2";
+      const realtimeVoice = "cedar";
+      const realtimeTranscriptionModel = "gpt-4o-transcribe";
+      realtimeSessionMetaRef.current = {
+        model: realtimeModel,
+        voice: realtimeVoice,
+        transcription_model: realtimeTranscriptionModel
+      };
+
       const tokenRes = await axios.post(`${PROCESS_TEXT_API_URL}/api/openai/realtime-token`, {
         instructions,
         candidateId: effectiveUserId,
-        model: "gpt-realtime-2",
-        voice: "cedar",
+        interview_link: getInterviewLinkForCost(),
+        model: realtimeModel,
+        voice: realtimeVoice,
         output_modalities: ["audio"],
-        transcription_model: "gpt-4o-transcribe",
+        transcription_model: realtimeTranscriptionModel,
         turn_detection: {
           type: "server_vad",
           threshold: 0.5,
@@ -883,6 +1052,7 @@ ${questionsRef.current.map((q, i) => `${i + 1}. ${q}`).join('\n')}
     }
 
     console.log("Realtime event:", evt.type, evt);
+    captureRealtimeUsageFromEvent(evt);
 
     switch (evt.type) {
       case 'session.created':
@@ -958,17 +1128,26 @@ ${questionsRef.current.map((q, i) => `${i + 1}. ${q}`).join('\n')}
       case 'input_audio_transcription.completed': {
         const transcript = (evt.transcript || evt.item?.content?.[0]?.transcript || '').trim();
         if (transcript) addMessage('user', transcript);
+        if (realtimeCandidateSpeechStartedAtRef.current) {
+          realtimeCandidateAudioMsRef.current += Date.now() - realtimeCandidateSpeechStartedAtRef.current;
+          realtimeCandidateSpeechStartedAtRef.current = null;
+        }
         setIsUserTalking(false);
         break;
       }
 
       case 'input_audio_buffer.speech_started':
         // Candidate started speaking; AI can be interrupted by server VAD.
+        realtimeCandidateSpeechStartedAtRef.current = Date.now();
         setIsAiThinking(false);
         setIsUserTalking(true);
         break;
 
       case 'input_audio_buffer.speech_stopped':
+        if (realtimeCandidateSpeechStartedAtRef.current) {
+          realtimeCandidateAudioMsRef.current += Date.now() - realtimeCandidateSpeechStartedAtRef.current;
+          realtimeCandidateSpeechStartedAtRef.current = null;
+        }
         setIsAiThinking(true);
         setIsAiTalking(false);
         break;
@@ -1007,6 +1186,7 @@ ${questionsRef.current.map((q, i) => `${i + 1}. ${q}`).join('\n')}
   }, [status, isCodingRoundEnabled, effectiveUserId]);
 
   const finishInterview = () => {
+    finalizeRealtimeCost();
     setStatus('done');
     if (mediaRecorderRef.current?.state !== 'inactive') mediaRecorderRef.current.stop();
     if (pcRef.current) pcRef.current.close();
