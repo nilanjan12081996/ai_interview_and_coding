@@ -260,7 +260,7 @@ const MeetPage = () => {
   const realtimeLastMeterAtRef = useRef(null);
   const realtimeCostFinalizedRef = useRef(false);
   const realtimeSessionMetaRef = useRef({
-    model: 'gpt-realtime-2',
+    model: 'gpt-realtime-mini',
     voice: 'cedar',
     transcription_model: 'gpt-4o-transcribe'
   });
@@ -957,7 +957,7 @@ ${questionsRef.current.map((q, i) => `${i + 1}. ${q}`).join('\n')}
 `;
       }
 
-      const realtimeModel = "gpt-realtime-2";
+      const realtimeModel = "gpt-realtime-mini";
       const realtimeVoice = "cedar";
       const realtimeTranscriptionModel = "gpt-4o-transcribe";
       realtimeSessionMetaRef.current = {
