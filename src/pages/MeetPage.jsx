@@ -1345,7 +1345,7 @@ ${questionsRef.current.map((q, i) => `${i + 1}. ${q}`).join('\n')}
       ${historyContext}`;
 
       const res = await axios.post('https://api.openai.com/v1/chat/completions', {
-        model: "gpt-4o",
+        model: "gpt-4o-mini",
         messages: [{ role: "user", content: prompt }],
         temperature: 0.2
       }, {
