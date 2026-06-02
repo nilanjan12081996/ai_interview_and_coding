@@ -70,6 +70,8 @@ const MeetPage = () => {
   const [isBehavioralRoundEnabled, setIsBehavioralRoundEnabled] = useState(true);
   const isBehavioralRoundEnabledRef = useRef(true);
   const isCodingRoundEnabledRef = useRef(true);
+  const [hasAcceptedRules, setHasAcceptedRules] = useState(false);
+  const [agreedToTerms, setAgreedToTerms] = useState(false);
 
 
   // Coding Mode State
@@ -282,6 +284,23 @@ const MeetPage = () => {
         }
         return false;
       };
+
+      // Fetch Interview Type (Coding only, behavioral only, or both) on mount
+      try {
+        const typeResponse = await axios.get(`${EXTERNAL_API_URL}/api/goodmood/interview/get/token/interview/type?token=${effectiveUserId}`);
+        console.log("Interview Type Response on mount:", typeResponse.data);
+        const typeData = typeResponse.data?.data;
+        if (typeData) {
+          const codingFlag = typeData.coding === 1;
+          const behavioralFlag = typeData.interviewChecking === 1;
+          setIsCodingRoundEnabled(codingFlag);
+          isCodingRoundEnabledRef.current = codingFlag;
+          setIsBehavioralRoundEnabled(behavioralFlag);
+          isBehavioralRoundEnabledRef.current = behavioralFlag;
+        }
+      } catch (error) {
+        console.error("Failed to fetch interview type on mount:", error);
+      }
 
       // 0. Fetch Coding Question (Prioritize so it's ready)
       console.log("Checking for coding question with token:", effectiveUserId);
@@ -1743,7 +1762,90 @@ AI Interviewer Action:
         </div>
       )}
 
-      {status === 'welcome' && (
+      {status === 'welcome' && !hasAcceptedRules && (
+        <div className="screen-rules-intro">
+          <div className="rules-card">
+            <div className="rules-header">
+              <h2>Important Instructions</h2>
+              <p>Please review and acknowledge the guidelines below to proceed to the interview for <strong>{jobTitle}</strong>.</p>
+            </div>
+            
+            <div className="rules-list">
+              <div className="rule-item-card">
+                <div className="rule-icon-box">
+                  <Info size={22} />
+                </div>
+                <div className="rule-info">
+                  <h3>Quiet Environment</h3>
+                  <p>You must sit in a quiet, noise-free room with no other people present.</p>
+                </div>
+              </div>
+
+              <div className="rule-item-card">
+                <div className="rule-icon-box">
+                  <Video size={22} />
+                </div>
+                <div className="rule-info">
+                  <h3>Camera Visibility & Lighting</h3>
+                  <p>Ensure there is sufficient lighting in the room so the camera can clearly capture your face.</p>
+                </div>
+              </div>
+
+              {isBehavioralRoundEnabled && (
+                <div className="rule-item-card">
+                  <div className="rule-icon-box">
+                    <Mic size={22} />
+                  </div>
+                  <div className="rule-info">
+                    <h3>No Background Noise</h3>
+                    <p>Apart from your voice, there should be no background noise or ambient talking.</p>
+                  </div>
+                </div>
+              )}
+
+              <div className="rule-item-card">
+                <div className="rule-icon-box">
+                  <AlertCircle size={22} color="#ea4335" />
+                </div>
+                <div className="rule-info">
+                  <h3>Strict Tab & Screen Monitoring</h3>
+                  <p>Switching tabs, exiting fullscreen, or opening another window during the exam will terminate your interview immediately.</p>
+                </div>
+              </div>
+            </div>
+
+            <div className="rules-agreement-section">
+              <label className={`agreement-label-card ${agreedToTerms ? 'checked' : ''}`}>
+                <div className="rule-checkbox-wrapper">
+                  <input
+                    id="chk-agreeToTerms"
+                    type="checkbox"
+                    checked={agreedToTerms}
+                    onChange={(e) => setAgreedToTerms(e.target.checked)}
+                  />
+                  <span className="checkbox-custom"></span>
+                </div>
+                <span className="agreement-text">
+                  I have read and agree to all the instructions and guidelines listed above.
+                </span>
+              </label>
+            </div>
+
+            <div className="rules-actions">
+              <button 
+                id="btn-accept-rules"
+                className="btn-accept-rules"
+                disabled={!agreedToTerms}
+                onClick={() => setHasAcceptedRules(true)}
+              >
+                Accept & Proceed
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {status === 'welcome' && hasAcceptedRules && (
         <div className="screen-welcome">
           <div className="meet-preview-box">
             <div className="avatar">👤</div>
