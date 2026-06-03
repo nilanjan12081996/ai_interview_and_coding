@@ -1739,7 +1739,7 @@ AI Interviewer Action:
   );
 
   return (
-    <div className="meet-fullscreen-wrapper">
+    <div className={`meet-fullscreen-wrapper ${status === 'welcome' ? 'scrollable-wrapper' : ''}`}>
       {/* --- Run First Alert Modal --- */}
       {showRunFirstAlert && (
         <div className="submit-confirm-overlay">
