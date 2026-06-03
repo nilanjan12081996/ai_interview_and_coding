@@ -128,13 +128,13 @@ const MeetPage = () => {
       if (aiAnalyserRef.current) {
         const array = new Uint8Array(aiAnalyserRef.current.frequencyBinCount);
         aiAnalyserRef.current.getByteFrequencyData(array);
-        
+
         let sum = 0;
         for (let i = 0; i < array.length; i++) {
           sum += array[i];
         }
         const average = sum / array.length;
-        
+
         // If average volume is above a threshold, AI is speaking
         isSpeaking = average > 4;
         if (isSpeaking) {
@@ -976,6 +976,13 @@ ${questionsRef.current.map((q, i) => `${i + 1}. ${q}`).join('\n')}
 `;
       }
 
+      instructions += `
+
+=== NOISE & LANGUAGE HANDLING ===
+- If you hear background noise, static, breathing, or ANY foreign language (like Bengali, Hindi, or Chinese), IGNORE IT COMPLETELY.
+- Do not transcribe it, do not reply to it, and do not apologize. Just remain completely silent.
+- Only respond to clear English speech.`;
+
       const realtimeModel = "gpt-realtime-mini";
       const realtimeVoice = "cedar";
       const realtimeTranscriptionModel = "gpt-4o-transcribe";
@@ -995,7 +1002,7 @@ ${questionsRef.current.map((q, i) => `${i + 1}. ${q}`).join('\n')}
         transcription_model: realtimeTranscriptionModel,
         turn_detection: {
           type: "server_vad",
-          threshold: 0.5,
+          threshold: 0.9,
           prefix_padding_ms: 300,
           silence_duration_ms: 2000
         },
@@ -1046,7 +1053,7 @@ ${questionsRef.current.map((q, i) => `${i + 1}. ${q}`).join('\n')}
           if (audioCtxRef.current && e.streams[0]) {
             const source = audioCtxRef.current.createMediaStreamSource(e.streams[0]);
             remoteAudioSourceRef.current = source;
-            
+
             if (audioDestRef.current) {
               source.connect(audioDestRef.current);
             }
@@ -1073,6 +1080,24 @@ ${questionsRef.current.map((q, i) => `${i + 1}. ${q}`).join('\n')}
 
     dcRef.current.onopen = () => {
       console.log("Realtime data channel opened");
+      // 1. Force strictly English and increase noise threshold
+      dcRef.current.send(JSON.stringify({
+        type: 'session.update',
+        session: {
+          input_audio_transcription: {
+            model: 'whisper-1',
+            language: 'en' // Eta strictly English force korbe, onno language er hallucination bondho hobe
+          },
+          turn_detection: {
+            type: 'server_vad',
+            threshold: 0.9, // 0.5 theke bariye 0.7 korlam jate halka noise/breathing ignore kore
+            prefix_padding_ms: 300,
+            silence_duration_ms: 2000
+          }
+        }
+      }));
+
+      // 2. Trigger the initial response
       dcRef.current.send(JSON.stringify({
         type: 'response.create',
         response: { output_modalities: ['audio'] }
@@ -1192,7 +1217,15 @@ ${questionsRef.current.map((q, i) => `${i + 1}. ${q}`).join('\n')}
       case 'conversation.item.input_audio_transcription.completed':
       case 'input_audio_transcription.completed': {
         const transcript = (evt.transcript || evt.item?.content?.[0]?.transcript || '').trim();
-        if (transcript) addMessage('user', transcript);
+        // Block Bengali, Hindi, Chinese, Japanese, Korean, Arabic etc.
+        const isForeignScript = /[\u0900-\u09FF\u4E00-\u9FFF\u3040-\u30FF\u0600-\u06FF\u0400-\u04FF]/;
+
+        if (transcript && !isForeignScript.test(transcript)) {
+          addMessage('user', transcript);
+        } else if (transcript) {
+          console.log("Blocked hallucinated text:", transcript);
+        }
+
         if (realtimeCandidateSpeechStartedAtRef.current) {
           realtimeCandidateAudioMsRef.current += Date.now() - realtimeCandidateSpeechStartedAtRef.current;
           realtimeCandidateSpeechStartedAtRef.current = null;
@@ -1502,7 +1535,8 @@ ${questionsRef.current.map((q, i) => `${i + 1}. ${q}`).join('\n')}
         type: "conversation.item.create",
         item: {
           type: "message", role: "user",
-          content: [{ type: "input_text", text: `[SYSTEM NOTIFICATION: CODING ROUND AUTO-SUBMITTED]
+          content: [{
+            type: "input_text", text: `[SYSTEM NOTIFICATION: CODING ROUND AUTO-SUBMITTED]
 The candidate's time expired or the session was interrupted. Their code has been saved automatically.
 
 AI Interviewer Action:
@@ -1769,7 +1803,7 @@ AI Interviewer Action:
               <h2>Important Instructions</h2>
               <p>Please review and acknowledge the guidelines below to proceed to the interview for <strong>{jobTitle}</strong>.</p>
             </div>
-            
+
             <div className="rules-list">
               <div className="rule-item-card">
                 <div className="rule-icon-box">
@@ -1832,7 +1866,7 @@ AI Interviewer Action:
             </div>
 
             <div className="rules-actions">
-              <button 
+              <button
                 id="btn-accept-rules"
                 className="btn-accept-rules"
                 disabled={!agreedToTerms}
