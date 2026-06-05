@@ -44,7 +44,7 @@ const staticQuestions = [
   }
 ];
 
-import { BASE_API_URL, EXTERNAL_API_URL, PROCESS_TEXT_API_URL, OPENAI_API_KEY } from '../config';
+import { BASE_API_URL, EXTERNAL_API_URL, PROCESS_TEXT_API_URL } from '../config';
 
 import './MeetPage.css';
 
@@ -1396,18 +1396,13 @@ ${questionsRef.current.map((q, i) => `${i + 1}. ${q}`).join('\n')}
 
       ${historyContext}`;
 
-      const res = await axios.post('https://api.openai.com/v1/chat/completions', {
+      const res = await axios.post(`${PROCESS_TEXT_API_URL}/api/v1/coding/run-simulated`, {
         model: "gpt-4o-mini",
         messages: [{ role: "user", content: prompt }],
         temperature: 0.2
-      }, {
-        headers: {
-          'Authorization': `Bearer ${OPENAI_API_KEY}`,
-          'Content-Type': 'application/json'
-        }
       });
 
-      const simulatedOutput = res.data.choices[0]?.message?.content || '{}';
+      const simulatedOutput = res.data.choices?.[0]?.message?.content || res.data.content || '{}';
       let parsed;
       try {
         parsed = JSON.parse(simulatedOutput.substring(simulatedOutput.indexOf('{'), simulatedOutput.lastIndexOf('}') + 1));
