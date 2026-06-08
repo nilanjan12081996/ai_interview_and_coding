@@ -182,6 +182,7 @@ const MeetPage = () => {
   const [showSubmitConfirm, setShowSubmitConfirm] = useState(false);
   const [showRunFirstAlert, setShowRunFirstAlert] = useState(false); // Alert: must run at least once
   const [hasRunCode, setHasRunCode] = useState({}); // { questionIdx: true } - tracks if run was done
+  const [showEndCallConfirm, setShowEndCallConfirm] = useState(false); // End call confirmation modal
 
   const codingQuestionsRef = useRef(codingQuestions);
   const currentIdxRef = useRef(currentQuestionIdx);
@@ -490,13 +491,19 @@ const MeetPage = () => {
       }
     };
 
-    // Window blur: in coding mode, do NOT auto-submit — too many false positives
-    // (Monaco editor autocomplete, browser toolbar, etc. all trigger window blur)
+    // Window blur: in behavioral mode triggers violation; in coding mode auto-submits after brief delay
     const handleWindowBlur = () => {
       if (!isCodingMode) {
         triggerViolation("Candidate clicked outside window.");
+      } else {
+        // In coding mode: clicking outside (electricity cut / window switch) auto-submits after a grace period
+        setTimeout(() => {
+          if (!autoSubmitCalledRef.current) {
+            autoSubmitCalledRef.current = true;
+            confirmSubmitCodeAuto();
+          }
+        }, 3000);
       }
-      // In coding mode: no action — visibility change handles real tab-switches
     };
 
     const handleFullscreenChange = () => {
@@ -1284,6 +1291,12 @@ ${questionsRef.current.map((q, i) => `${i + 1}. ${q}`).join('\n')}
   }, [status, isCodingRoundEnabled, effectiveUserId]);
 
   const finishInterview = () => {
+    // If coding is enabled, automatically submit the candidate's code when the interview ends (for any reason)
+    if (isCodingRoundEnabledRef.current && !autoSubmitCalledRef.current) {
+      autoSubmitCalledRef.current = true;
+      confirmSubmitCodeAuto();
+    }
+
     finalizeRealtimeCost();
     setStatus('done');
     if (mediaRecorderRef.current?.state !== 'inactive') mediaRecorderRef.current.stop();
@@ -1735,6 +1748,87 @@ AI Interviewer Action:
 
   return (
     <div className={`meet-fullscreen-wrapper ${status === 'welcome' ? 'scrollable-wrapper' : ''}`}>
+      {/* --- End Call Confirmation Modal --- */}
+      {showEndCallConfirm && (
+        <div className="submit-confirm-overlay end-call-overlay">
+          <div className="end-call-modal">
+            {/* Header stripe */}
+            <div className="end-call-modal-header">
+              <div className="end-call-modal-icon">
+                <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                  <path d="M22 16.92v3a2 2 0 0 1-2.18 2 19.79 19.79 0 0 1-8.63-3.07A19.5 19.5 0 0 1 4.69 12 19.79 19.79 0 0 1 1.61 3.41 2 2 0 0 1 3.6 1.23h3a2 2 0 0 1 2 1.72c.127.96.361 1.903.7 2.81a2 2 0 0 1-.45 2.11L7.91 8.82a16 16 0 0 0 6.29 6.29l.96-.96a2 2 0 0 1 2.11-.45c.907.339 1.85.573 2.81.7A2 2 0 0 1 22 16.92z"/>
+                </svg>
+              </div>
+              <div className="end-call-modal-header-text">
+                <h2>End Interview Session?</h2>
+                <p>You must submit your work before ending.</p>
+              </div>
+            </div>
+
+            {/* Divider */}
+            <div className="end-call-divider" />
+
+            {/* Body */}
+            <div className="end-call-modal-body">
+              <div className="end-call-info-row">
+                <div className="end-call-info-icon">
+                  <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#8ab4f8" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                    <circle cx="12" cy="12" r="10"/>
+                    <line x1="12" y1="8" x2="12" y2="12"/>
+                    <line x1="12" y1="16" x2="12.01" y2="16"/>
+                  </svg>
+                </div>
+                <p>
+                  Ending the call without submitting will <strong>permanently discard your code</strong>. Please submit your solutions first to ensure they are saved and evaluated.
+                </p>
+              </div>
+              <div className="end-call-info-row end-call-info-mandatory">
+                <div className="end-call-info-icon">
+                  <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#fbbc04" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                    <path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"/>
+                    <line x1="12" y1="9" x2="12" y2="13"/>
+                    <line x1="12" y1="17" x2="12.01" y2="17"/>
+                  </svg>
+                </div>
+                <p>Submission is <strong>mandatory</strong> to complete this interview round.</p>
+              </div>
+            </div>
+
+            {/* Actions */}
+            <div className="end-call-modal-actions">
+              <button
+                className="end-call-btn-back"
+                onClick={() => setShowEndCallConfirm(false)}
+              >
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                  <line x1="19" y1="12" x2="5" y2="12"/>
+                  <polyline points="12 19 5 12 12 5"/>
+                </svg>
+                Continue Interview
+              </button>
+              <button
+                className="end-call-btn-submit"
+                onClick={() => {
+                  setShowEndCallConfirm(false);
+                  // Use the auto-submit path which safely saves without asking AI to speak 
+                  // and then immediately force ends the call.
+                  if (!autoSubmitCalledRef.current) {
+                    autoSubmitCalledRef.current = true;
+                    confirmSubmitCodeAuto();
+                  }
+                  finishInterview();
+                }}
+              >
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                  <polyline points="20 6 9 17 4 12"/>
+                </svg>
+                Submit &amp; End Call
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
       {/* --- Run First Alert Modal --- */}
       {showRunFirstAlert && (
         <div className="submit-confirm-overlay">
@@ -2163,7 +2257,7 @@ AI Interviewer Action:
               <button className="meet-btn active">
                 <ScreenShare size={20} />
               </button>
-              <button className="meet-btn-end" onClick={finishInterview}>
+              <button className="meet-btn-end" onClick={() => setShowEndCallConfirm(true)}>
                 <PhoneOff size={26} />
               </button>
             </div>
