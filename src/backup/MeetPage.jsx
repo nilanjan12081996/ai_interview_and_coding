@@ -806,14 +806,7 @@ const MeetPage = () => {
 
   const startInterview = async () => {
     try {
-      localStreamRef.current = await navigator.mediaDevices.getUserMedia({
-        audio: {
-          noiseSuppression: true,
-          echoCancellation: true,
-          autoGainControl: true
-        },
-        video: true
-      });
+      localStreamRef.current = await navigator.mediaDevices.getUserMedia({ audio: true, video: true });
       if (videoRef.current) videoRef.current.srcObject = localStreamRef.current;
     } catch (err) {
       alert(`Camera/Microphone Error: ${err.name} - ${err.message}. Please check if you have a camera/mic connected, and close other apps (Zoom, Teams) that might be using it.`);
@@ -1040,9 +1033,9 @@ ${questionsRef.current.map((q, i) => `${i + 1}. ${q}`).join('\n')}
         transcription_model: realtimeTranscriptionModel,
         turn_detection: {
           type: "server_vad",
-          threshold: 0.65,
-          prefix_padding_ms: 500,
-          silence_duration_ms: 1800
+          threshold: 0.45,
+          prefix_padding_ms: 800,
+          silence_duration_ms: 1200
         },
         additionalConfig: {}
       });
@@ -1124,14 +1117,13 @@ ${questionsRef.current.map((q, i) => `${i + 1}. ${q}`).join('\n')}
         session: {
           input_audio_transcription: {
             model: 'whisper-1',
-            language: 'en', // Eta strictly English force korbe
-            prompt: "A clear interview conversation. Do not transcribe background noise, table tapping, clicks, or silence." // Whisper noise hallucination fix
+            language: 'en' // Eta strictly English force korbe, onno language er hallucination bondho hobe
           },
           turn_detection: {
             type: 'server_vad',
-            threshold: 0.65, // Sweet spot: ignores knocks but picks up normal speech
-            prefix_padding_ms: 500,
-            silence_duration_ms: 1800
+            threshold: 0.45,
+            prefix_padding_ms: 800,
+            silence_duration_ms: 1200
           }
         }
       }));
@@ -1305,25 +1297,8 @@ ${questionsRef.current.map((q, i) => `${i + 1}. ${q}`).join('\n')}
   };
 
   const addMessage = (who, text) => {
-    if (!text) return;
-    
-    // Safely remove known Whisper stage directions
-    let cleanedText = text.replace(/\s*[\(\[](clears throat|coughs|cough|sighs|sigh|laughs|laugh|chuckles|sniffles|throat clearing|knocking|tapping|typing|clicking|rustling|thud|noise|silence|pause|breathing|inhales|exhales|footsteps)[\)\]]\s*/gi, ' ').trim();
-    
-    // Ignore non-English script hallucinations (Korean, Chinese, Japanese, Russian, Arabic)
-    if (/[\u3131-\uD79D\u4E00-\u9FFF\u3040-\u30FF\u0400-\u04FF\u0600-\u06FF]/.test(cleanedText)) {
-      return;
-    }
-
-    // Ignore common single-word/phrase hallucinations caused by noise
-    const lowerText = cleanedText.toLowerCase();
-    const noiseWords = ['close', 'close.', 'silence', 'silence.', 'noise', 'noise.', 'you', 'you.', 'thank you', 'thank you.', 'apa cakap?', 'there he is.'];
-    if (noiseWords.includes(lowerText)) {
-      cleanedText = '';
-    }
-
-    if (!cleanedText) return;
-    setMessages(prev => [...prev, { who, text: cleanedText, time: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) }]);
+    if (!text.trim()) return;
+    setMessages(prev => [...prev, { who, text, time: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) }]);
     setTimeout(() => { if (convoRef.current) convoRef.current.scrollTop = convoRef.current.scrollHeight; }, 100);
   };
 
